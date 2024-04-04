@@ -45,7 +45,7 @@ Sqlite 3 Database - Minecraft Server Crafter also searches for the JSON files fo
 
 Networking - This program automatically detects the Local IP address of the machine the program is on and sets it as the IP address by default for the Server IP, which can be changed within the program under Server Properties File > Networking.
 
-Version Updater - Detects realtime version updates at boot for the given server types that Minecraft Server Crafter. When this is running, only official resources thats provided by the creators(when applicable) of the specific server type, including Minecraft Server Crafter - Lite Edition
+Version Updater - Detects realtime version updates at boot for the given server types that Minecraft Server Crafter natively supports. When this is running, only official resources thats provided by the creators(when applicable) of the specific server type, including Minecraft Server Crafter - Lite Edition
 
 Curseforge API Compatible - Minecraft Server Crafter - Lite Edition has the compatiblity to use Curseforges API. This is primarily used ONLY for server types that doesn't have an API for version updates. The usage of Curseforge API in Minecraft Server Crafter - Lite Edition is subjected to change(I.E. usage of modpacks)
 
