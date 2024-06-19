@@ -33,7 +33,9 @@ You will need to configure your antivirus software to tell it that Minecraft Ser
 For statistical data on the matter(regarding the virus score, and other information), refer to this data: https://www.virustotal.com/gui/file/f8ea222edf92222be6a5b6943fba994271bdfd221f4a14c3b7715ff9d295c3bb/detection
 
 # Requirements
-An active internet connection and server directory
++ An active internet connection
++ Server directory
++ A CPU that has no more than at least 4 threads
 
 # Features
 
