@@ -1,0 +1,170 @@
+{
+    "Instances": {
+        "last-config": {
+            "id": "My Minecraft 1.20.2 Server"
+        },
+        "Vanilla": [
+            {
+                "My Minecraft 1.20.2 Server": {
+                    "minecraftVersion": "1.20.2",
+                    "legacy-launch": {
+                        "forceToDirectory": false,
+                        "serverDirectory": null
+                    },
+                    "properties": {
+                        "enable-jmx-monitoring": "false",
+                        "rcon.port": "25575",
+                        "level-seed": null,
+                        "gamemode": "survival",
+                        "enable-command-block": "false",
+                        "enable-query": "false",
+                        "generator-settings": "{}",
+                        "level-name": "world",
+                        "motd": "A Minecraft Server",
+                        "query.port": "25565",
+                        "pvp": "true",
+                        "generate-structures": "true",
+                        "difficulty": "easy",
+                        "network-compression-threshold": "256",
+                        "max-tick-time": "60000",
+                        "require-resource-pack": "false",
+                        "max-players": "20",
+                        "use-native-transport": "true",
+                        "online-mode": "true",
+                        "enable-status": "true",
+                        "allow-flight": "false",
+                        "broadcast-rcon-to-ops": "true",
+                        "view-distance": "10",
+                        "resource-pack-prompt": null,
+                        "server-ip": "192.168.1.21",
+                        "allow-nether": "true",
+                        "server-port": "25565",
+                        "enable-rcon": "false",
+                        "sync-chunk-writes": "true",
+                        "op-permission-level": "4",
+                        "prevent-proxy-connections": "false",
+                        "hide-online-players": "false",
+                        "resource-pack": null,
+                        "entity-broadcast-range-percentage": "100",
+                        "simulation-distance": "10",
+                        "rcon.password": null,
+                        "player-idle-timeout": "0",
+                        "force-gamemode": "false",
+                        "rate-limit": "0",
+                        "hardcore": "false",
+                        "white-list": "false",
+                        "broadcast-console-to-ops": "true",
+                        "spawn-npcs": "true",
+                        "spawn-animals": "true",
+                        "function-permission-level": "2",
+                        "level-type": "minecraft\\:normal",
+                        "text-filtering-config": null,
+                        "spawn-monsters": "true",
+                        "enforce-whitelist": "false",
+                        "resource-pack-sha1": null,
+                        "spawn-protection": "16",
+                        "max-world-size": "29999984",
+                        "enforce-secure-profile": "true",
+                        "max-chained-neighbor-updates": "1000000",
+                        "initial-disabled-packs": null,
+                        "initial-enabled-packs": "vanilla",
+                        "previews-chat": "false",
+                        "log-ips": "true",
+                        "resource-pack-id": null
+                    }
+                }
+            }
+        ],
+        "Modded": [
+            {
+                "My Forge Instance": {
+                    "minecraftVersion": "1.19.2",
+                    "modloader": {
+                        "id": "forge",
+                        "version": "43.2.0",
+                        "isForge": true,
+                        "serverjar_filepath": "base/sandbox/Instances/Modpacks/ExplorerTech-v0.1/libraries/net/minecraftforge/forge/1.19.2-43.2.0",
+                        "modlisting": []
+                    },
+                    "legacy-launch": {
+                        "forceToDirectory": false,
+                        "serverDirectory": null
+                    },
+                    "properties": {}
+                },
+                "My Fabric Instance": {
+                    "minecraftVersion": "1.21",
+                    "modloader": {
+                        "id": "fabric",
+                        "version": null,
+                        "isForge": false,
+                        "serverjar_filepath": null,
+                        "modlisting": []
+                    },
+                    "legacy-launch": {
+                        "forceToDirectory": false,
+                        "serverDirectory": null
+                    },
+                    "properties": {}
+                },
+                "My Custom Modded Instance": {
+                    "minecraftVersion": "1.19.2",
+                    "modloader": {
+                        "id": "fabric",
+                        "version": null,
+                        "isForge": false,
+                        "serverjar_filepath": null,
+                        "modlisting": []
+                    },
+                    "legacy-launch": {
+                        "forceToDirectory": false,
+                        "serverDirectory": null
+                    },
+                    "properties": {}
+                }
+            },
+            {
+                "test": {
+                    "minecraftVersion": "1.20.2",
+                    "modloader": {
+                        "id": "fabric",
+                        "version": "0.15.3",
+                        "serverjar_filepath": null,
+                        "isForge": false,
+                        "modlisting": [
+                            "i",
+                            "i",
+                            "i"
+                        ]
+                    },
+                    "legacy-launch": {
+                        "forceToDirectory": false,
+                        "serverDirectory": null
+                    },
+                    "properties": {}
+                }
+            },
+            {
+                "test": {
+                    "minecraftVersion": "1.20.2",
+                    "modloader": {
+                        "id": "fabric",
+                        "version": "0.15.3",
+                        "serverjar_filepath": null,
+                        "isForge": false,
+                        "modlisting": [
+                            "i",
+                            "i",
+                            "i"
+                        ]
+                    },
+                    "legacy-launch": {
+                        "forceToDirectory": false,
+                        "serverDirectory": null
+                    },
+                    "properties": {}
+                }
+            }
+        ]
+    }
+}
