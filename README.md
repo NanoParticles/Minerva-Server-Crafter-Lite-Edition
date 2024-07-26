@@ -1,16 +1,16 @@
-# Minecraft Server Crafter - Lite Edition
-Minecraft Server Crafter - Lite Edition is a Lightweight GUI Console that allows the user to create, configure, and manage a Minecraft Server with the given server jar file.
+# Minerva Server Crafter - Lite Edition
+Minerva Server Crafter - Lite Edition is a Lightweight GUI Console that allows the user to create, configure, and manage a Minecraft Server with the given server jar file.
 
 # Credits
-Yot360 - Huge thanks for helping me with the Console Shell interaction with input and output between the Minecraft Server and Minecraft Server Crafter. (Github page: https://github.com/Yot360)
+Yot360 - Huge thanks for helping me with the Console Shell interaction with input and output between the Minecraft Server and Minerva Server Crafter. (Github page: https://github.com/Yot360)
 
-# What is Minecraft Server Crafter?
+# What is Minerva Server Crafter?
 
-Minecraft Server Crafter is a modernized GUI Server Manager with a clean look for Minecraft Servers, featuring a direct console that shows the input/output of the Minecraft Server, configuring the server.properties file directly, manages whitelisting, and player bans. Minecraft Server Crafter doesn't collect any of your personal data. Its not the "server crafting" way.
+Minerva Server Crafter is a modernized GUI Server Manager with a clean look for Minecraft Servers, featuring a direct console that shows the input/output of the Minecraft Server, configuring the server.properties file directly, manages whitelisting, and player bans. Minerva Server Crafter doesn't collect any of your personal data. Its not the "server crafting" way.
 
 # Wait, but my Antivirus sees it as a virus!
 
-That can be scary. Believe me, Minecraft Server Crafter is my baby. Like any parent, I want to take care of my baby. Minecraft Server Crafter has such a low score it should be no problem. Lower the score the better. Its highly likely it came back as a falsely positive. First take a deep breath. Now that we have taken that deep breath, consider the following:
+That can be scary. Believe me, Minerva Server Crafter is my baby. Like any parent, I want to take care of my baby. Minerva Server Crafter has such a low score it should be no problem. Lower the score the better. Its highly likely it came back as a falsely positive. First take a deep breath. Now that we have taken that deep breath, consider the following:
 
 - Have I updated my virus definitions?
 
