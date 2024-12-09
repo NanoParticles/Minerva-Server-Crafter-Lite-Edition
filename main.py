@@ -32,6 +32,17 @@ from packaging.version import Version
 import xmltodict
 import logging
 import ast
+import filecmp
+import pathlib
+import windows_toasts
+import toml
+import io
+import time
+import queue
+import screeninfo
+import re
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 #We are going to make a github object
 MCSC_API_githubObj = Github()
@@ -49,6 +60,8 @@ MinecraftServerType["name"] = ""
 possibleJarNames = ["fabric-","forge-","spigot-","server","craftbukkit-","purpur-"]
 ServerType = ["fabric","forge","spigot","server","craftbukkit","purpur"]
 blocksize = 1024**2
+#Notifications
+notificationHandler = windows_toasts.WindowsToaster('Minerva Server Crafter')
 #Set the absolute path, so we are going to cheese it
 pathreferenceTemp = os.path.dirname(os.path.abspath(__file__))
 #Random file reference
@@ -67,11 +80,18 @@ class ModpackIndexClass():
 	def searchModpack(modpackName=None | str):
 		'Searches for modpack'
 		if modpackName is not None:
+			result = []
 			response = requests.get(f"https://www.modpackindex.com/api/v1/modpacks?name={modpackName}")
 			if response.status_code == 200:
 				rawModpackData = response.json()
 				ModpackData = rawModpackData['data']
-				return ModpackData
+				totalItems = len(ModpackData)
+				for item in ModpackData:
+					if totalItems != 0:
+						#Does it belong to curseforge
+						if item['curse_info'] is not None:
+							result.append(item)
+				return result
 
 class CurseforgeClass():
 	'Utility for handling the Curseforge API'
@@ -96,6 +116,21 @@ class CurseforgeClass():
 		value = bytesString.decode('utf-8')
 		return value
 	
+	def getThumbnailforModpack(modpackName=None):
+		#We need to check if the modpack is already imported to the json model
+		with open(str(rootFilepath) + "/properties.json","r") as mcscJson:
+			jsondump = json.load(mcscJson)
+			mcscJson.close()
+		moddedInstances = jsondump['Instances']['Modded']
+		totalInstances = len(moddedInstances)
+		currentIndex = 0
+		for item in moddedInstances:
+			if modpackName in item[currentIndex]:
+				#Its already imported! :D
+				raw_modpackData = ModpackIndexClass.searchModpack(modpackName=str(modpackName))
+				print(raw_modpackData)
+				break
+
 	def outputLines(process,modloader):
 		for line in process.stdout:
 			print("<" + str(modloader).capitalize() + "-Installer-Output>: " + line.decode('ascii').strip("\n"))
@@ -145,7 +180,6 @@ class CurseforgeClass():
 		os.mkdir(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/importdata")
 		os.mkdir(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/importdata/{filename}")
 		os.mkdir(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{filename}")
-		os.mkdir(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{filename}/mods")
 		os.chdir(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/importdata/{filename}")
 		print("[Minerva Server Crafter - Modpack Importing]: Unpacking Modpack from file...")
 		try:
@@ -182,12 +216,12 @@ class CurseforgeClass():
 			fileID_data = rawfileID_data['data']
 			return fileID_data
 
-	def parseModID(modID=None):
-		'Parses the modID json data from the Curseforge API'
+	def parseprojectID(projectID=None):
+		'Parses the projectID json data from the Curseforge API'
 
 		headers = {'Accept': 'application/json','x-api-key': str(CurseforgeClass.decodeByteSecret())}
 
-		response = requests.get(f"https://api.curseforge.com/v1/mods/{modID}",headers=headers)
+		response = requests.get(f"https://api.curseforge.com/v1/mods/{projectID}",headers=headers)
 		if response.status_code == 200:
 			rawjsondata = response.json()
 			jsondata = rawjsondata['data']
@@ -231,20 +265,23 @@ class CurseforgeClass():
 		modpackSearchData = modpackSearchData[indexVal]
 		#We need curseforge ID of the modpack
 		modpackID = modpackSearchData['curse_info']['curse_id']
-		modpackData = CurseforgeClass.parseModID(modID=modpackID)
+		modpackData = CurseforgeClass.parseprojectID(projectID=modpackID)
 		#We need to get the server pack download url
 		mainFileID = modpackData['mainFileId']
 		modpack_fileID_data = CurseforgeClass.parsefileID(modID=modpackID,fileID=mainFileID)
-		serverPackID = modpack_fileID_data['serverPackFileId']
-		serverpackfilename = modpack_fileID_data['fileName']
-		serverPackURL = CurseforgeClass.getModFileDownloadURL(projectID=modpackID,fileID=serverPackID)
-		serverpackResponse = requests.get(str(serverPackURL))
-		if serverpackResponse.status_code == 200:
-			with open(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/downloads/{serverpackfilename}","wb") as serverpackZIP:
-				serverpackZIP.write(serverpackResponse.content)
-				serverpackZIP.close()
-			print(f"[Minerva Server Crafter]: Modpack {modpackName} Server Pack Archive Downloaded Successfully")
-			return
+		#Check if its a server pack
+		if 'serverPackFileId' in modpack_fileID_data:
+			serverPackID = modpack_fileID_data['serverPackFileId']
+			serverpackfilename = modpack_fileID_data['fileName']
+			serverPackURL = CurseforgeClass.getModFileDownloadURL(projectID=modpackID,fileID=serverPackID)
+			serverpackResponse = requests.get(str(serverPackURL))
+			if serverpackResponse.status_code == 200:
+				with open(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/downloads/{serverpackfilename}","wb") as serverpackZIP:
+					serverpackZIP.write(serverpackResponse.content)
+					serverpackZIP.close()
+				print(f"[Minerva Server Crafter]: Modpack {modpackName} Server Pack Archive Downloaded Successfully")
+				return 200
+			
 	def parseModloaderData(modloaderName=None):
 		'Parses the modloader information using modloaderName'
 		headers = {'Accept': 'application/json','x-api-key': str(CurseforgeClass.decodeByteSecret())}
@@ -257,7 +294,7 @@ class CurseforgeClass():
 	def getModpackfromModpackID(modpackID=None):
 		'Downloads the modpack data and imports it to Minerva Server Crafter'
 		if modpackID is not None:
-			modpack_data = CurseforgeClass.parseModID(modID=str(modpackID))
+			modpack_data = CurseforgeClass.parseprojectID(projectID=str(modpackID))
 			#We can refine this further
 			fileID = modpack_data['mainFileId']
 			filedata = CurseforgeClass.parsefileIDByModID(modID=str(modpackID),fileID=fileID)
@@ -281,16 +318,16 @@ class CurseforgeClass():
 				result = tuple([minecraftversion,modloaderType])
 				return result
 
-
 	@classmethod
 	def loadModpack(self,filepath=None | zipfile.Path,modpackName=None,isLegacy=False):
 		'Loads a modpack to Minerva Server Crafter. While a filepath is given, the modpackName must be set to None. While a modpackName is given, the filepath must be set to None. For the filepath parmeter, it must be a Curseforge Modpack that was exported to a zip archive. While under the logic of the filepath, Minerva Server Crafter will handle retrieving the mods, and the server type installation. Also while under this logic, Minerva Server Crafter will attempt to skip client-only mods. While under the logic of the modpackName, Minerva Server Crafter will handle retrieving and extracting the server pack from the offical curseforge modpack, and server type installation'
 		global finalCode
 		global modpackData
-		'Imports the Curseforge Modpack ZIP Archive to Minerva Server Crafter using filepath. This process uses data from the manifest.json, and from the overrides folder. The mods are downloaded from curseforge into the downloads folder, given from Minerva Server Crafter. During this process, it can take a bit depending on how many mods there are. Once the mods are finished downloading, they are then transferred over to the Modpack root folder, and emptying the downloads folder. Checks what modloader the modpack is using by the list of known compatible server types. When an unsupported modloader is detected, it raises an internal error, and stops the import process. Otherwise, the importing process proceeds to obtaining the modloaders installer, installing the server distribution of the modloader, grabbing the modpack overrides, then cleaning up the leftover importdata in the Modpacks directory. Once all that is done, the Modpack gets added to the Modpack Instance table.'
+		global minecraftVersion
 		finalCode = 0
 		filename = os.path.splitext(os.path.basename(str(filepath)))[0]
 		downloadsfolder = str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads"
+		os.chdir(str(rootFilepath))
 		print("[Minerva Server Crafter - Modpack Importing]: Beginning Stage 1 | 8 - File Creation...")
 		if modpackName is not None and filepath is None:
 			#We need change up the logic slightly. Since this is an official Modpack on curseforge, we can just lookup the modpack
@@ -309,7 +346,7 @@ class CurseforgeClass():
 			#Get the curseforge data
 			modpackID = searchData['curse_info']['curse_id']
 			#Now we can hand it of to the Curseforge API
-			modpack_data = CurseforgeClass.parseModID(modID=modpackID)
+			modpack_data = CurseforgeClass.parseprojectID(projectID=modpackID)
 			fileID = modpack_data['mainFileId']
 			filedata = CurseforgeClass.parsefileIDByModID(modID=modpackID,fileID=fileID)
 			filename = filedata['fileName']
@@ -317,120 +354,167 @@ class CurseforgeClass():
 			minecraftVersion = modpackResult[0]
 			servertypeVersion = modpackResult[1]
 			print("[Minerva Server Crafter - Modpack Importing]: Beginning Stage 2 | 8 - Server Pack Download(this can take awhile, depending on file size)...")
-			CurseforgeClass.getModpackServerPack(modpackName=str(modpackName))
-			print("[Minerva Server Crafter - Modpack Importing]: Stage 2 | 8 - Server Pack Download - OK")
-			time.sleep(1.5)
-			print("[Minerva Server Crafter - Modpack Importing]: Beginning Stage 3 | 8 - Server Pack Extracting...")
-			#Extract to the mods folder
-			targetedPack = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/downloads/{filename}"
-			modpackname = os.path.splitext(os.path.basename(targetedPack))[0]
-			modsfolder = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackname}/mods"
-			with zipfile.ZipFile(str(targetedPack),"r") as serverpackZip:
-				serverpackZip.extractall(path=modsfolder)
-				serverpackZip.close()
-			print("[Minerva Server Crafter - Modpack Importing]: Stage 3 | 8 - Server Pack Extracting - OK")
-			os.remove(str(targetedPack))
-			#Generate modlist
-			modlist = []
-			for root,Dirs,Files in os.walk(modsfolder):
-				for f in Files:
-					if f.endswith(".jar"):
-						name = os.path.splitext(os.path.basename(f))
-						modlist.append(name)
-						continue
-			time.sleep(1.5)
-			print("[Minerva Server Crafter - Modpack Importing]: Beginning Stage 4 | 8 - Server Type Downloading...")
-			#We need to build the data
-			modpackData = {}
-			modloaderversion = str(servertypeVersion).split("-")
-			modloaderversion = tuple(modloaderversion)
-			modpackData["modloader-version"] = str(modloaderversion[1])
-			if modloaderversion[0] in ServerType:
-				if modloaderversion[0] == "forge":
-					#Build the full name of the file
-					modpackData["modloader-type"] = modloaderversion[0]
-					serverTypeInstaller_filename = str(modloaderversion[0]) + "-" + str(minecraftVersion) + "-" + str(modloaderversion[1]) + "-installer.jar"
-					modpackData["modloader-realname"] = str(minecraftVersion) + "-" + str(modloaderversion[1])
-					#We need to build the maven direct download url
-					url = "https://maven.minecraftforge.net/net/minecraftforge/" + str(modloaderversion[0]) + "/" + str(minecraftVersion) + "-" + str(modloaderversion[1]) + "/" + str(serverTypeInstaller_filename)
-					#We need to run a specific command to run the installer
-					command = ['java','-jar',str(serverTypeInstaller_filename),'--installServer']
-				if modloaderversion[0] == "fabric":
-					#We can just use the current installer version
-					installerList = MCSCUpdater.FabricBaseClass.getInstallerListingfromTable()
-					installerURLlisting = MCSCUpdater.FabricBaseClass.getInstallerURLPrefixListing()
-					modpackData["modloader-type"] = modloaderversion[1]
-					keyCheck = "modloader-realname" in modpackData.keys()
-					if keyCheck == True:
-						del modpackData["modloader-realname"]
-					serverTypeInstaller_filename = str(modloaderversion[0]) + "-installer-" + str(installerList[0]) + ".jar"
-					url = f"{installerURLlisting[0]}/{serverTypeInstaller_filename}"
-					#We need to run a specific command to run the installer
-					command = ['java','-jar',str(serverTypeInstaller_filename),'server', '-mcversion',str(minecraftversion),'-loader',str(modloaderversion[1]),'-dir',str(downloadsfolder)]
-				#Get the installer
-				response = requests.get(str(url))
-				if response.status_code == 200:
-					with open(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/downloads/{serverTypeInstaller_filename}","wb") as forgeinstallerFile:
-						forgeinstallerFile.write(response.content)
-						forgeinstallerFile.close()
-					#Obtain a minecraft vanilla server, just to be sure
-					ServerVersion_Control.downloadvanillaserverfile(version=str(minecraftVersion))
-					shutil.copytree(src=str(rootFilepath) + f"/base/sandbox/build/Minecraft Vanilla/{minecraftVersion}",dst=str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads",dirs_exist_ok=True)
-					os.chdir(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads")
-					print("[Minerva Server Crafter - Importing Modpack]: Stage 4 | 8 - Server Type Downloading - OK")
-					print("[Minerva Server Crafter - Importing Modpack]: Beginning Stage 5 | 8 - Server Type Installation...")
-					installerProcess = subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-					threadedProcess = threading.Thread(target=CurseforgeClass.outputLines,args=(installerProcess,modloaderversion[0]),name="Server Type Installer Thread")
-					threadedProcess.start()
-					ReturnCode = installerProcess.wait()
-					if ReturnCode == 0:
-						threadCompleted = threadedProcess.join()
-						print("[Minerva Server Crafter - Importing Modpack]: Stage 5 | 8 - Server Type Installation - OK")
-						print("[Minerva Server Crafter - Importing Modpack]: Beginning Stage 6 | 8 - Server Type File Operations...")
-						#We can safely delete the installer
-						os.remove(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/downloads/{serverTypeInstaller_filename}")
-						#We can now copy the file tree now
-						shutil.copytree(src=str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackname}",dirs_exist_ok=True)
-						#We can clear the downloads folder
-						for File_name in os.listdir(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads"):
-							file_path = os.path.join(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads", File_name)
-							try:
-								if os.path.isfile(file_path) or os.path.islink(file_path):
-									os.unlink(file_path)
-								elif os.path.isdir(file_path):
-									shutil.rmtree(file_path)
-							except Exception as e:
-								raise MCSCInternalError(f"Failed to delete {file_path}.",e)
-						print("[Minerva Server Crafter - Importing Modpack]: Stage 6 | 8 - Server Type File Operations - OK")
-						print("[Minerva Server Crafter - Importing Modpack]: Beginning Stage 7 | 8 - Modpack Overrides...")
-						#We can grab the overrides
-						shutil.copytree(src=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/importdata/{modpackname}/overrides",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackname}",dirs_exist_ok=True)
-						print("[Minerva Server Crafter - Importing Modpack]: Stage 7 | 8 - Modpack Overrides - OK")
-						time.sleep(10)
-						print("[Minerva Server Crafter - Importing Modpack]: Beginning Stage 8 | 8 - Importing Cleanup...")
-						#We can safely delete the import data
-						shutil.rmtree(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/importdata")
-						print("[Minerva Server Crafter - Importing Modpack]: Stage 8 | 8 - Importing Cleanup - OK")
-						print(f"[Minerva Server Crafter]: {modpackName} Curseforge Modpack has been successfully imported. Adding to Modpack Table...")
-						#Connect to database
-						os.chdir(str(rootFilepath))
-						MCSCDatabase = sqlite3.connect('mcsc_data.db')
-						MCSC_Cursor = MCSCDatabase.cursor()
-						MCSC_Cursor.execute("INSERT INTO CurseforgeModpackInstances_Table (ModpackName,ModpackType,ModpackTypeVersion,Modpack_modlist) VALUES (?,?,?,?)",(modpackName,modloaderversion[0],modloaderversion[1],str(modlist)))
-						MCSCDatabase.commit()
-						MCSC_Cursor.close()
-						MCSCDatabase.close()
-						print("[Minerva Server Crafter]: Modpack has been added to the Modpack Table.")
-						filename = os.path.splitext(os.path.basename(filename))[0]
-						ServerFileIO.addInstancetoJSON(name=str(modpackName),serverType=str(modpackData["modloader-type"]),isModded=True,modlist=modlist,modloaderversion=modpackData["modloader-version"],minecraftversion=minecraftVersion)
-						os.rename(src=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{filename}",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}")
-						ServerFileIO.onExit_setInstancePointer(instanceName=str(modpackName))
-						ServerFileIO.writemcEULA(instanceName=str(modpackName))
-						properties = ServerFileIO.usePropertiesByMinecraftVersion(minecraftVersion=str(minecraftVersion))
-						time.sleep(3)
-						shutil.copy(src=str(rootFilepath) + f"/base/sandbox/build/Minecraft Vanilla/{minecraftVersion}/server.properties",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}")
-						ServerFileIO.exportPropertiestoJSON(instanceName=str(modpackName),alternativeDict=properties)
-						return 200
+			serverPackCode = CurseforgeClass.getModpackServerPack(modpackName=str(modpackName))
+			if serverPackCode == 906:
+				#Unsupported Modpack. Server Pack doesnt exist.
+				print("[Minerva Server Crafter - Modpack Importing]: Stage 2 | 8 - Server Pack Download - FAILED")
+				print("[Minerva Server Crafter]: Unable to Import Modpack. Cleaning up File Structure...")
+				importDataFolder = str(rootFilepath) + "/base/sandbox/Instances/Modpacks/importdata"
+				modpackarchivename = os.path.splitext(filename)[0]
+				modpackfolder = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackarchivename}"
+				shutil.rmtree(str(importDataFolder))
+				shutil.rmtree(str(modpackfolder))
+				return
+			else:
+				if serverPackCode == 200:
+					print("[Minerva Server Crafter - Modpack Importing]: Stage 2 | 8 - Server Pack Download - OK")
+					time.sleep(1.5)
+					print("[Minerva Server Crafter - Modpack Importing]: Beginning Stage 3 | 8 - Server Pack Extracting...")
+					#Extract to the mods folder
+					targetedPack = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/downloads/{filename}"
+					modpackname = os.path.splitext(os.path.basename(targetedPack))[0]
+					modpackPath = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackname}"
+					modsfolder = str(modpackPath) + "/mods"
+					with zipfile.ZipFile(str(targetedPack),"r") as serverpackZip:
+						serverpackZip.extractall(path=modsfolder)
+						serverpackZip.close()
+					print("[Minerva Server Crafter - Modpack Importing]: Stage 3 | 8 - Server Pack Extracting - OK")
+					os.remove(str(targetedPack))
+					time.sleep(1.5)
+					print("[Minerva Server Crafter - Modpack Importing]: Beginning Stage 4 | 8 - Server Type Downloading...")
+					#We need to build the data
+					modpackData = {}
+					modloaderversion = str(servertypeVersion).split("-")
+					modloaderversion = tuple(modloaderversion)
+					modpackData["modloader-version"] = str(modloaderversion[1])
+					if modloaderversion[0] in ServerType:
+						if modloaderversion[0] == "forge":
+							#Build the full name of the file
+							currentModloader = modloaderversion[0]
+							serverTypeInstaller_filename = str(modloaderversion[0]) + "-" + str(minecraftVersion) + "-" + str(modloaderversion[1]) + "-installer.jar"
+							modpackData["modloader-realname"] = str(minecraftVersion) + "-" + str(modloaderversion[1])
+							#We need to build the maven direct download url
+							url = "https://maven.minecraftforge.net/net/minecraftforge/" + str(modloaderversion[0]) + "/" + str(minecraftVersion) + "-" + str(modloaderversion[1]) + "/" + str(serverTypeInstaller_filename)
+							#We need to run a specific command to run the installer
+							command = ['java','-jar',str(serverTypeInstaller_filename),'--installServer']
+						if modloaderversion[0] == "fabric":
+							#We can just use the current installer version
+							installerList = MCSCUpdater.FabricBaseClass.getInstallerListingfromTable()
+							installerURLlisting = MCSCUpdater.FabricBaseClass.getInstallerURLPrefixListing()
+							currentModloader = modloaderversion[0]
+							serverTypeInstaller_filename = str(modloaderversion[0]) + "-installer-" + str(installerList[0]) + ".jar"
+							url = f"{installerURLlisting[0]}/{serverTypeInstaller_filename}"
+							#We need to run a specific command to run the installer
+							command = ['java','-jar',str(serverTypeInstaller_filename),'server', '-mcversion',str(minecraftVersion),'-loader',str(modloaderversion[1]),'-dir',str(downloadsfolder)]
+						#Get the installer
+						response = requests.get(str(url))
+						if response.status_code == 200:
+							with open(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/downloads/{serverTypeInstaller_filename}","wb") as forgeinstallerFile:
+								forgeinstallerFile.write(response.content)
+								forgeinstallerFile.close()
+							#Obtain a minecraft vanilla server, just to be sure
+							ServerVersion_Control.downloadvanillaserverfile(version=str(minecraftVersion))
+							shutil.copytree(src=str(rootFilepath) + f"/base/sandbox/build/Minecraft Vanilla/{minecraftVersion}",dst=str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads",dirs_exist_ok=True)
+							os.chdir(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads")
+							print("[Minerva Server Crafter - Importing Modpack]: Stage 4 | 8 - Server Type Downloading - OK")
+							print("[Minerva Server Crafter - Importing Modpack]: Beginning Stage 5 | 8 - Server Type Installation...")
+							installerProcess = subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+							threadedProcess = threading.Thread(target=CurseforgeClass.outputLines,args=(installerProcess,modloaderversion[0]),name="Server Type Installer Thread")
+							threadedProcess.start()
+							ReturnCode = installerProcess.wait()
+							if ReturnCode == 0:
+								threadCompleted = threadedProcess.join()
+								print("[Minerva Server Crafter - Importing Modpack]: Stage 5 | 8 - Server Type Installation - OK")
+								print("[Minerva Server Crafter - Importing Modpack]: Beginning Stage 6 | 8 - Server Type File Operations...")
+								#We can safely delete the installer
+								os.remove(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/downloads/{serverTypeInstaller_filename}")
+								#We can now copy the file tree now
+								shutil.copytree(src=str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackname}",dirs_exist_ok=True)
+								#We can clear the downloads folder
+								for File_name in os.listdir(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads"):
+									file_path = os.path.join(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads", File_name)
+									try:
+										if os.path.isfile(file_path) or os.path.islink(file_path):
+											os.unlink(file_path)
+										elif os.path.isdir(file_path):
+											shutil.rmtree(file_path)
+									except Exception as e:
+										raise MCSCInternalError(f"Failed to delete {file_path}.",e)
+								print("[Minerva Server Crafter - Importing Modpack]: Stage 6 | 8 - Server Type File Operations - OK")
+								print("[Minerva Server Crafter - Importing Modpack]: Beginning Stage 7 | 8 - Modpack Overrides...")
+								#Check for the same files in the overrides folder
+								overridesFolder = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/importdata/{modpackname}/overrides"
+								ModpackFolder = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackname}"
+								# Traverse the overrides directory
+								for root, dirs, files in os.walk(overridesFolder):
+									# Create corresponding directory structure in the permanent folder
+									relative_path = os.path.relpath(root, overridesFolder)
+									perm_path = os.path.join(ModpackFolder, relative_path)
+
+									# Ensure the directory exists in the permanent folder
+									if not os.path.exists(perm_path):
+										os.makedirs(perm_path)
+
+									# Copy files
+									for file in files:
+										override_file_path = os.path.join(root, file)
+										perm_file_path = os.path.join(perm_path, file)
+
+										# If the file doesn't exist in the permanent directory or is different, copy it
+										if not os.path.exists(perm_file_path) or not filecmp.cmp(override_file_path, perm_file_path, shallow=False):
+											shutil.copy2(override_file_path, perm_file_path)
+											print(f"Copied {override_file_path} to {perm_file_path}")
+										else:
+											print(f"File already exists and is identical: {perm_file_path}")
+
+									# Copy directories
+									for dir in dirs:
+										override_dir_path = os.path.join(root, dir)
+										perm_dir_path = os.path.join(perm_path, dir)
+
+										# If the directory doesn't exist in the permanent directory, create it
+										if not os.path.exists(perm_dir_path):
+											os.makedirs(perm_dir_path)
+											print(f"Created directory {perm_dir_path}")
+
+								print("[Minerva Server Crafter - Importing Modpack]: Stage 7 | 8 - Modpack Overrides - OK")
+								#Generate modlist
+								modlist = []
+								for root,Dirs,Files in os.walk(modsfolder):
+									for f in Files:
+										if f.endswith(".jar"):
+											name = os.path.splitext(os.path.basename(f))
+											modlist.append(name[0])
+											continue
+								totalmods = len(modlist)
+								time.sleep(10)
+								print("[Minerva Server Crafter - Importing Modpack]: Beginning Stage 8 | 8 - Importing Cleanup...")
+								#We can safely delete the import data
+								shutil.rmtree(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/importdata")
+								print("[Minerva Server Crafter - Importing Modpack]: Stage 8 | 8 - Importing Cleanup - OK")
+								print(f"[Minerva Server Crafter]: {modpackName} Curseforge Modpack has been successfully imported. Adding to Modpack Table...")
+								#Connect to database
+								os.chdir(str(rootFilepath))
+								MCSCDatabase = sqlite3.connect('mcsc_data.db')
+								MCSC_Cursor = MCSCDatabase.cursor()
+								MCSC_Cursor.execute("INSERT INTO CurseforgeModpackInstances_Table (ModpackName,ModpackType,ModpackTypeVersion,Modpack_modlist) VALUES (?,?,?,?)",(modpackName,modloaderversion[0],modloaderversion[1],str(modlist)))
+								MCSCDatabase.commit()
+								MCSC_Cursor.close()
+								MCSCDatabase.close()
+								print("[Minerva Server Crafter]: Modpack has been added to the Modpack Table.")
+								filename = os.path.splitext(os.path.basename(filename))[0]
+								modloader_version = modpackData["modloader-version"]
+								ServerFileIO.addInstancetoJSON(name=str(modpackName),serverType=str(currentModloader),isModded=True,modlist=modlist,modloaderversion=modloader_version,minecraftversion=minecraftVersion)
+								ServerFileIO.onExit_setInstancePointer(instanceName=str(modpackName),category="Modded")
+								ServerFileIO.zipnameToModpack(instanceName=str(modpackName))
+								ServerFileIO.writemcEULA(instanceName=str(modpackName))
+								jarPath = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}"
+								ServerFileIO.importpropertiestojson(serverjarpath=jarPath,instanceName=str(modpackName),isModded=True,minecraftVersion=str(minecraftVersion),create_data_ok=True,legacyBehavior=False,modloader_version=str(modloader_version),modloaderType=str(currentModloader))
+								ServerFileIO.usePropertiesByMinecraftVersion(minecraftVersion=str(minecraftVersion))
+								time.sleep(3)
+								shutil.copy(src=str(rootFilepath) + f"/base/sandbox/build/Minecraft Vanilla/{minecraftVersion}/server.properties",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}/")
+								ServerFileIO.exportPropertiestoJSON(instanceName=str(modpackName),category="Modded")
+								return 200
 		elif modpackName is None and filepath is not None:
 			zipResult = CurseforgeClass.extractModpackZIP(filepath=str(filepath))
 			if zipResult == 200:
@@ -450,7 +534,7 @@ class CurseforgeClass():
 					fileID = int(rawModList[int(currentIndex)]['fileID'])
 					# Parse mod details
 					FileDetails = CurseforgeClass.parsefileIDByModID(modID=modID, fileID=fileID)
-					modData = CurseforgeClass.parseModID(modID=modID)
+					modData = CurseforgeClass.parseprojectID(projectID=modID)
 					categoryFilter = ["Addons","Applied Energistics 2", "Blood Magic", "Buildcraft", "CraftTweaker", "Create", "Forestry", "Galacticraft", "Industrial Craft", "Integrated Dynamics", "KubeJS", "Skyblock", "Thaumcraft", "Thermal Expansion", "Tinker's Construct", "Adventure and RPG", "API and Library", "Armor, Tools, and Weapons", "Food", "Magic", "Performance", "Server Utility", "Storage", "Technology", "Automation", "Energy", "Energy, Fluid, and Item Transport", "Farming", "Genetics", "Processing", "Player Transport", "World Gen", "Biomes", "Dimensions", "Mobs", "Ores and Resources", "Structures"]
 					# Check if the mod belongs to any of the desired categories
 					if CurseforgeClass.hascategory(modjsonData=modData, categoryQuery=categoryFilter):
@@ -518,7 +602,7 @@ class CurseforgeClass():
 					if modloaderversion[0] in ServerType:
 						if modloaderversion[0] == "forge":
 							#Build the full name of the file
-							modpackData["modloader-type"] = modloaderversion[0]
+							currentModloader = modloaderversion[0]
 							serverTypeInstaller_filename = str(modloaderversion[0]) + "-" + str(minecraftversion) + "-" + str(modloaderversion[1]) + "-installer.jar"
 							modpackData["modloader-realname"] = str(minecraftversion) + "-" + str(modloaderversion[1])
 							#We need to build the maven direct download url
@@ -529,7 +613,7 @@ class CurseforgeClass():
 							#We can just use the current installer version
 							installerList = MCSCUpdater.FabricBaseClass.getInstallerListingfromTable()
 							installerURLlisting = MCSCUpdater.FabricBaseClass.getInstallerURLPrefixListing()
-							modpackData["modloader-type"] = modloaderversion[1]
+							currentModloader = modloaderversion[1]
 							keyCheck = "modloader-realname" in modpackData.keys()
 							if keyCheck == True:
 								del modpackData["modloader-realname"]
@@ -600,22 +684,22 @@ class CurseforgeClass():
 							filename = os.path.splitext(os.path.basename(filename))[0]
 							if isLegacy == True:
 								legacybool = isLegacy
-								ServerFileIO.addInstancetoJSON(name=str(modpackName),serverType=str(modpackData["modloader-type"]),isModded=True,modlist=modlist,modloaderversion=modpackData["modloader-version"],enforcelegacy=legacybool,serverpath_legacy=str(filepath),minecraftversion=minecraftVersion)
+								ServerFileIO.addInstancetoJSON(name=str(modpackName),serverType=currentModloader,isModded=True,modlist=modlist,modloaderversion=modpackData["modloader-version"],enforcelegacy=legacybool,serverpath_legacy=str(filepath),minecraftversion=minecraftVersion)
 								os.rename(src=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{filename}",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}")
-								ServerFileIO.onExit_setInstancePointer(instanceName=str(modpackName))
+								ServerFileIO.onExit_setInstancePointer(instanceName=str(modpackName),category="Modded")
 								ServerFileIO.writemcEULA(instanceName=str(modpackName))
 								properties = ServerFileIO.usePropertiesByMinecraftVersion(minecraftVersion=str(minecraftVersion))
 								shutil.copyfile(src=str(rootFilepath) + f"/base/sandbox/build/Minecraft Vanilla/{minecraftVersion}/server.properties",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}")
-								ServerFileIO.exportPropertiestoJSON(instanceName=str(modpackName),alternativeDict=properties)
+								ServerFileIO.exportPropertiestoJSON(instanceName=str(modpackName),category="Modded",alternativeDict=properties)
 								
 							else:
-								ServerFileIO.addInstancetoJSON(name=str(modpackName),serverType=str(modpackData["modloader-type"]),isModded=True,modlist=modlist,modloaderversion=modpackData["modloader-version"],minecraftversion=minecraftVersion)
+								ServerFileIO.addInstancetoJSON(name=str(modpackName),serverType=currentModloader,isModded=True,modlist=modlist,modloaderversion=modpackData["modloader-version"],minecraftversion=minecraftVersion)
 								os.rename(src=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{filename}",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}")
-								ServerFileIO.onExit_setInstancePointer(instanceName=str(modpackName))
+								ServerFileIO.onExit_setInstancePointer(instanceName=str(modpackName),category="Modded")
 								ServerFileIO.writemcEULA(instanceName=str(modpackName))
 								properties = ServerFileIO.usePropertiesByMinecraftVersion(minecraftVersion=str(minecraftVersion))
 								shutil.copyfile(src=str(rootFilepath) + f"/base/sandbox/build/Minecraft Vanilla/{minecraftVersion}/server.properties",dst=str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}")
-								ServerFileIO.exportPropertiestoJSON(instanceName=str(modpackName),alternativeDict=properties)
+								ServerFileIO.exportPropertiestoJSON(instanceName=str(modpackName),category="Modded",alternativeDict=properties)
 							return 200
 
 class MCSCUpdater():
@@ -624,14 +708,56 @@ class MCSCUpdater():
 
 	@classmethod
 	def getUpdates(self):
+		#Notifications are going to be needed
+		global notificationHandler
+
+		updaterNotificationHandle = windows_toasts.Toast(text_fields=["Scanning for Updates..."],duration=windows_toasts.ToastDuration.Short)
+		notificationHandler.show_toast(updaterNotificationHandle)
 		try:
-			self.PurpurBaseClass.updatePurpurTable()
-			self.SpigotBaseClass.updateBuildToolsTable()
-			self.ForgeBaseClass.updateForgeVersionTable()
-			self.MinecraftVanillaBaseClass.updateMinecraftVersions()
-			self.FabricBaseClass.updateFabricInstallerTable()
-			self.FabricBaseClass.updateFabricVersions()
-			return
+			getPurpurUpdate = self.PurpurBaseClass.updatePurpurTable()
+			#We need the tuple values
+			totalPurpurUpdates = getPurpurUpdate[0]
+			purpurUpdateBool = getPurpurUpdate[1]
+			getBuildToolsUpdate = self.SpigotBaseClass.updateBuildToolsTable()
+			totalBuildToolsUpdates = getBuildToolsUpdate[0]
+			buildtoolUpdateBool = getBuildToolsUpdate[1]
+			getForgeUpdates = self.ForgeBaseClass.updateForgeVersionTable()
+			totalForgeUpdates = getForgeUpdates[0]
+			forgeUpdateBool = getForgeUpdates[1]
+			getMinecraftVanillaUpdates = self.MinecraftVanillaBaseClass.updateMinecraftVersions()
+			totalMinecraftVanillaUpdates = getMinecraftVanillaUpdates[0]
+			minecraftVanillaUpdateBool = getMinecraftVanillaUpdates[1]
+			getFabricInstallerUpdates = self.FabricBaseClass.updateFabricInstallerTable()
+			totalFabricInstallerUpdates = getFabricInstallerUpdates[0]
+			fabricInstallerUpdateBool = getFabricInstallerUpdates[1]
+			getFabricVersionUpdates = self.FabricBaseClass.updateFabricVersions()
+			totalFabricVersionUpdates = getFabricVersionUpdates[0]
+			fabricVersionUpdateBool = getFabricVersionUpdates[1]
+			versionUpdateDefinitions = int(totalPurpurUpdates) + int(totalBuildToolsUpdates) + int(totalForgeUpdates) + int(totalMinecraftVanillaUpdates) + int(totalFabricInstallerUpdates) + int(totalFabricVersionUpdates)
+			if versionUpdateDefinitions > 0:
+				#What was updated?
+				updateList = []
+				if purpurUpdateBool == True:
+					updateList.append("Purpur Build(s)")
+				if buildtoolUpdateBool == True:
+					updateList.append("BuildTools Version(s)")
+				if forgeUpdateBool == True:
+					updateList.append("Forge Version(s)")
+				if minecraftVanillaUpdateBool == True:
+					updateList.append("Minecraft Vanilla Version(s)")
+				if fabricInstallerUpdateBool == True:
+					updateList.append("Fabric Installer Version(s)")
+				if fabricVersionUpdateBool == True:
+					updateList.append("Fabric Version(s)")
+				#We generated the list. Notify the user
+				postUpdateToast = windows_toasts.Toast(text_fields=[f"{versionUpdateDefinitions} Internal Table Update(s) detected. Rebooting..."])
+				notificationHandler.show_toast(postUpdateToast)
+				os.execl(sys.executable,sys.executable,*sys.argv)
+			else:
+				postUpdateToast = windows_toasts.Toast(text_fields=["No updates detected."])
+				notificationHandler.show_toast(postUpdateToast)
+				return
+			
 		except MCSCInternalError as e:
 			print(f"Internal Error has occured: {e}")
 			return
@@ -648,21 +774,44 @@ class MCSCUpdater():
 	@classmethod
 	def runUpdates(cls):
 		#Thread the updates
+		global notificationHandler
 		updaterThread = threading.Thread(target=cls.updater,name="Minerva Server Crafter - Updater")
 		updaterThread.start()
 		threadresult = cls.q.get()
 		if threadresult == True:
+			postupdateMSCUpdaterNotificationHandle = windows_toasts.Toast(text_fields=["Database Table Updates completed. Launching..."])
+			notificationHandler.show_toast(postupdateMSCUpdaterNotificationHandle)
 			print("[Minerva Server Crafter - Updater]: Database Table Updates completed. Launching...")
 			return
 		else:
 			raise MCSCInternalError("Failed to run Updates. Internal Exception")
+	
+	#class MinervaServerCrafterBaseClass():
+	#	MinervaServerRepo = MCSC_API_githubObj.get_repo("NanoParticles/Minerva-Server-Crafter-Lite-Edition")
+#
+	#	@classmethod
+	#	def readVersionFromUpdate(cls):
+	#		'Returns the latest version of Minerva Server Crafter from the Repository'
+	#		#We need to get the version number from the main.py
+	#		latestMinervaBuild = cls.MinervaServerRepo.get_contents('main.py')
+	#		with open(str(rootFilepath) + '/update.mcscupdate','wb') as updateFile:
+	#			updateFile.write(latestMinervaBuild.decoded_content)
+	#			updateFile.close()
+	#		with open(str(rootFilepath) + '/update.mcscupdate','r') as updateData:
+	#			rawData = updateData.readlines()
+	#			updateData.close()
+	#		buildData = str(rawData)
+	#		build_versionDataRaw = buildData.lstrip().encode(encoding='ascii')
+	#		build_versionData = ''.join(s for s in build_versionDataRaw.decode(encoding="ascii") if ord(s)>31 and ord(s)<126)
+	#		print(build_versionData)
+	#		return
 
 	class MinecraftVanillaBaseClass():
 		def updateMinecraftVersions():
 			'Checks for Minecraft Version updates. When there is an update, it gets added to the table, and Minerva Server Crafter reboots'
+
 			MCSCDatabase = sqlite3.connect("mcsc_data.db")
 			MCSC_Cursor = MCSCDatabase.cursor()
-
 		    # Fetch the latest available Minecraft versions from Mojang
 			versionManifestURL = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
 			response = requests.get(versionManifestURL)
@@ -683,8 +832,11 @@ class MCSCUpdater():
 				# Insert only the new versions into the database
 				new_versions = [version for version in sortedVersions if version['version'] not in existing_versions]
 				totalupdates = len(new_versions)
+				hadUpdate = False
 
 				if new_versions:
+					#Set the flag to true
+					hadUpdate = True
 					print(f"[Minerva Server Crafter - Updater - Minecraft Version Check]: There are {totalupdates} new Minecraft Version(s) updates. Updating...")
 					MCSC_Cursor.execute('DELETE FROM minecraftversion_Table')
 					MCSCDatabase.commit()
@@ -697,11 +849,14 @@ class MCSCUpdater():
 					MCSCDatabase.commit()
 					MCSC_Cursor.close()
 					MCSCDatabase.close()
-					print('[Minerva Server Crafter - Updater - Minecraft Version Check]: Version Table has been updated successfully. Rebooting Program...')
-					os.execl(sys.executable,sys.executable,*sys.argv)
+					if hadUpdate == True:
+						result = tuple((int(totalupdates),hadUpdate))
+					print('[Minerva Server Crafter - Updater - Minecraft Version Check]: Version Table has been updated successfully.')
+					return result
 				else:
+					result = tuple((0,False))
 					print("[Minerva Server Crafter - Updater - Minecraft Version Check]: No new Minecraft Versions detected")
-					return
+					return result
 			else:
 				print("[Minerva Server Crafter - Updater]: Failed to get version manifest")
 				return
@@ -719,6 +874,7 @@ class MCSCUpdater():
 		def updatePurpurTable():
 			'Checks for updates from the Purpur API. When there is a new build is found, the table gets updated(Newest to oldest). When the purpur table is updated, Minerva Server Crafter reboots'
 			#We need to check for any purpur updates
+
 			MCSCDatabase = sqlite3.connect("mcsc_data.db")
 			MCSC_Cursor = MCSCDatabase.cursor()
 			baseurl = "https://api.purpurmc.org/v2/purpur/"
@@ -744,9 +900,12 @@ class MCSCUpdater():
 				existingBuilds = {row[0]:row[1] for row in MCSC_Cursor.fetchall()}
 				newBuilds = [(PurpurBuild,minecraftversion) for minecraftversion, PurpurBuild in currentBuilds.items() for PurpurBuild in PurpurBuild if PurpurBuild not in existingBuilds]
 				totalNewBuilds = len(newBuilds)
+				hadupdate = False
 				if newBuilds:
+					#Set the flag
+					hadupdate = True
 					MCSC_Cursor.execute("DELETE FROM PurpurVersion_Table")
-					print(f"[Minerva Server Crafter - Updater - Purpur Builds Check]: There are {totalNewBuilds} new build(s). Updating...")
+					print(f"[Minerva Server Crafter - Updater - Purpur Builds Check]: There are {totalNewBuilds} new build(s). Updating Table...")
 					for mcversion,purpurBuildList in currentBuilds.items():
 						for purpurBuildID in purpurBuildList:
 							MCSC_Cursor.execute("INSERT INTO PurpurVersion_Table VALUES (?,?)", (purpurBuildID,mcversion))
@@ -755,11 +914,16 @@ class MCSCUpdater():
 					MCSCDatabase.commit()
 					MCSC_Cursor.close()
 					MCSCDatabase.close()
-					print("[Minerva Server Crafter - Updater - Purpur Builds Check]: Version Table has been updated successfully. Rebooting...")
-					os.execl(sys.executable,sys.executable,*sys.argv)
+					if hadupdate == True:
+						result = tuple((int(totalNewBuilds),hadupdate))
+					print("[Minerva Server Crafter - Updater - Purpur Builds Check]: Build Table has been updated successfully.")
+					return result
+					
 				else:
+					result = tuple((0,False))
 					print("[Minerva Server Crafter - Updater - Purpur Builds Check]: No new Purpur builds detected")
-					return
+					return result
+				
 		def getBuildsbyVersion(version) -> list:
 			'Returns a list of Purpur Versions thats compatiable with the given Minecraft Version'
 			#We need to parse the database table
@@ -775,6 +939,7 @@ class MCSCUpdater():
 		'Utility that handles the compatiblities thats tied to Spigot and its forks'
 		def updateBuildToolsTable():
 			'Checks for successful builds of BuildTools in the jenkins repository. Failed builds are exempt as a result. When there is successful builds thats not in the database table, the table gets updated(newest builds to oldest). When the table gets updated, Minerva Server Crafter reboots.'
+			
 			MCSCDatabase = sqlite3.connect("mcsc_data.db")
 			MCSC_Cursor = MCSCDatabase.cursor()
 			MCSC_Cursor.execute("SELECT BuildID, Url FROM BuildTools_SuccessfulBuildVerified_Table")
@@ -816,10 +981,13 @@ class MCSCUpdater():
 				#Now that we have a dictionary with all of the successful builds, we need to know if its missing in the database
 				missingEntries = {a: b for a, b in SuccessfulBuilds.items() if a not in databaseData}
 				TotalEntriesMissing = len(missingEntries)
+				hadupdate = False
 				if missingEntries:
 					MCSC_Cursor.execute("DELETE FROM BuildTools_SuccessfulBuildVerified_Table")
 					MCSCDatabase.commit()
-					print(f"[Minerva Server Crafter - Updater - BuildTools Build Check]: There are {TotalEntriesMissing} new successful builds. Updating database...")
+					#Set Flag
+					hadupdate = True
+					print(f"[Minerva Server Crafter - Updater - BuildTools Build Check]: There are {TotalEntriesMissing} new successful build(s). Updating Table...")
 					for BuildID,url in missingEntries.items():
 						MCSC_Cursor.execute("INSERT INTO BuildTools_SuccessfulBuildVerified_Table (BuildID, Url) VALUES (?,?)", (BuildID, url))
 					for k,v in databaseData.items():
@@ -827,11 +995,14 @@ class MCSCUpdater():
 					MCSCDatabase.commit()
 					MCSC_Cursor.close()
 					MCSCDatabase.close()
-					print("[Minerva Server Crafter - Updater - BuildTools Build Check]: Version Table has been updated successfully. Rebooting Program...")
-					os.execl(sys.executable,sys.executable,*sys.argv)
+					if hadupdate == True:
+						result = tuple((int(TotalEntriesMissing),hadupdate))
+					print("[Minerva Server Crafter - Updater - BuildTools Build Check]: Build Table has been updated successfully.")
+					return result
 				else:
-					print("[Minerva Server Crafter - Updater - BuildTools Build Check]: No new BuildTools Versions detected")
-					return
+					result = tuple((0,False))
+					print("[Minerva Server Crafter - Updater - BuildTools Build Check]: No new successful builds for BuildTools detected")
+					return result
 
 
 		def getBuildTools(url=None):
@@ -934,6 +1105,7 @@ class MCSCUpdater():
 
 		def updateForgeVersionTable():
 			'Checks for Forge Updates from Curseforge. When a new forge version is detected, the table is updated. When the table is updated, Minerva Server Crafter reboots.'
+			
 			MCSCDatabase = sqlite3.connect("mcsc_data.db")
 			MCSC_Cursor = MCSCDatabase.cursor()
 			response = requests.get("https://api.curseforge.com/v1/minecraft/modloader",headers={"Accept": "application/json",'x-api-key': str(CurseforgeClass.decodeByteSecret())})
@@ -955,9 +1127,12 @@ class MCSCUpdater():
 				existingVersions = {row[0]:row[1] for row in MCSC_Cursor.fetchall()}
 				newVersions = [(forgeVersion, minecraftVersion) for minecraftVersion, forgeVersions in currentforgeversions.items() for forgeVersion in forgeVersions if forgeVersion not in existingVersions]
 				totalNewVersions = len(newVersions)
+				hadupdate = False
 				if newVersions:
+					#Set Flag
+					hadupdate = True
 					MCSC_Cursor.execute("DELETE FROM forgeVersion_Table")
-					print(f"[Minerva Server Crafter - Updater - Forge Version Check]: There are {totalNewVersions} total new version(s). Updating...")
+					print(f"[Minerva Server Crafter - Updater - Forge Version Check]: There are {totalNewVersions} total new version(s). Updating Table...")
 					for minecraft_version, forge_version_list in sorted(currentforgeversions.items(), key=lambda x: Version(x[0]), reverse=True):
 						for forge_version in forge_version_list:
 							MCSC_Cursor.execute("INSERT INTO forgeVersion_Table VALUES (?, ?)", (forge_version, minecraft_version))
@@ -967,11 +1142,15 @@ class MCSCUpdater():
 					MCSCDatabase.commit()
 					MCSC_Cursor.close()
 					MCSCDatabase.close()
-					print("[Minerva Server Crafter - Updater - Forge Version Check]: Version Table Updated. Rebooting...")
-					os.execl(sys.executable,sys.executable,*sys.argv)
+					if hadupdate == True:
+						result = tuple((int(totalNewVersions),hadupdate))
+					print("[Minerva Server Crafter - Updater - Forge Version Check]: Version Table Updated.")
+					return result
 				else:
+					result = tuple((0,False))
 					print("[Minerva Server Crafter - Updater - Forge Version Check]: No new Forge Versions detected")
-					return
+					return result
+				
 		def getForgeVersionsbyVersion(version) -> list:
 			'Returns a list of Forge Versions thats compatiable with the given Minecraft Version'
 			#We need to get the forge versions based off of the given minecraft version
@@ -986,6 +1165,7 @@ class MCSCUpdater():
     #We need to do some things
 		def updateFabricInstallerTable():
 			'Checks for Fabric Installer updates'
+			
 			MCSCDatabase = sqlite3.connect('mcsc_data.db')
 			MCSC_Cursor = MCSCDatabase.cursor()
 
@@ -993,19 +1173,22 @@ class MCSCUpdater():
 
 			if response.status_code == 200:
 				xmlData = xmltodict.parse(response.content)
-				loaderversionList = xmlData["metadata"]['versioning']['versions']['version']
+				installerversionList = xmlData["metadata"]['versioning']['versions']['version']
 
-				fabricloaderURLS = {str(item): f"https://maven.fabricmc.net/net/fabricmc/fabric-installer/{item}/" for item in loaderversionList}
+				fabricinstallerURLS = {str(item): f"https://maven.fabricmc.net/net/fabricmc/fabric-installer/{item}/" for item in installerversionList}
 
 				# Get versions already in the table
 				MCSC_Cursor.execute("SELECT version FROM FabricInstallerVersion_Table")
 				currentVersions = set(row[0] for row in MCSC_Cursor.fetchall())
 
 				# Filter new versions not already in the table
-				newVersions = [(loaderversion, fabricloaderURLS[loaderversion]) for loaderversion in loaderversionList if loaderversion not in currentVersions]
+				newVersions = [(installerversion, fabricinstallerURLS[installerversion]) for installerversion in installerversionList if installerversion not in currentVersions]
 				totalUpdates = len(newVersions)
+				hadupdate = False
 
 				if newVersions:
+					#Set the flag
+					hadupdate = True
 					print(f"[Minerva Server Crafter - Updater - Fabric Installer Check]: There are {totalUpdates} total update(s). Updating Table...")
 					MCSC_Cursor.execute("DELETE FROM FabricInstallerVersion_Table")
 					for v, u in sorted(newVersions, key=lambda x: Version(x[0]), reverse=True):
@@ -1013,21 +1196,24 @@ class MCSCUpdater():
 					MCSCDatabase.commit()
 					MCSC_Cursor.close()
 					MCSCDatabase.close()
-					print("[Minerva Server Crafter - Updater - Fabric Installer Check]: Version Table has been successfully updated. Rebooting...")
-					os.execl(sys.executable,sys.executable,*sys.argv)
+					if hadupdate == True:
+						result = tuple((int(totalUpdates),hadupdate))
+					print("[Minerva Server Crafter - Updater - Fabric Installer Check]: Version Table has been successfully updated.")
+					return result
 
 				else:
+					result = tuple((0,False))
 					print("[Minerva Server Crafter - Updater - Fabric Installer Check]: No new Fabric Installer versions detected")
 					MCSC_Cursor.close()
 					MCSCDatabase.close()
-					return
+					return result
 		
 		def getInstallerListingfromTable() -> list:
 			'Returns a complete list of applicable installer versions from the version Table'
 			#connect to the database
 			MCSCDatabase = sqlite3.connect('mcsc_data.db')
 			MCSC_Cursor = MCSCDatabase.cursor()
-			MCSC_Cursor.execute('SELECT version FROM FabricLoaderVersionTable')
+			MCSC_Cursor.execute('SELECT version FROM FabricInstallerVersion_Table')
 			loaderListing = [loaderVersion[0] for loaderVersion in MCSC_Cursor.fetchall()]
 			MCSC_Cursor.close()
 			MCSCDatabase.close()
@@ -1038,7 +1224,7 @@ class MCSCUpdater():
 			#Connect to the database
 			MCSCDatabase = sqlite3.connect('mcsc_data.db')
 			MCSC_Cursor = MCSCDatabase.cursor()
-			MCSC_Cursor.execute('SELECT url FROM FabricLoaderVersionTable')
+			MCSC_Cursor.execute('SELECT url FROM FabricInstallerVersion_Table')
 			loaderListing = [loaderVersion[0] for loaderVersion in MCSC_Cursor.fetchall()]
 			MCSC_Cursor.close()
 			MCSCDatabase.close()
@@ -1046,6 +1232,7 @@ class MCSCUpdater():
 		
 		def updateFabricVersions():
 			'Checks for version updates for fabric using the Curseforge API'
+			
 			headers = {"Accept": "application/json",'x-api-key': str(CurseforgeClass.decodeByteSecret())}
 
 			response = requests.get("https://api.curseforge.com/v1/minecraft/modloader",headers=headers,params={'includeAll': True})
@@ -1075,9 +1262,11 @@ class MCSCUpdater():
 				versionTableData = {row[0]: row[1] for row in MCSC_Cursor.fetchall()}
 				newversions = [version for version in currentfabricVersions.keys() if version not in versionTableData.keys()]
 				totalupdates = len(newversions)
+				hadupdate = False
 				if newversions:
 					#We have updates
-					print(f"[Minerva Server Crafter - Updater - Fabric Version Check]: There are {totalupdates} updates. Updating Table...")
+					hadupdate = True
+					print(f"[Minerva Server Crafter - Updater - Fabric Version Check]: There are {totalupdates} new version update(s). Updating Table...")
 					MCSC_Cursor.execute("DELETE FROM fabricVersion_Table")
 					for k1,v1 in currentfabricVersions.items():
 						MCSC_Cursor.execute("INSERT INTO fabricVersion_Table (version,compatiableMinecraftVersions) VALUES (?,?)", (k1,str(v1)))
@@ -1085,14 +1274,17 @@ class MCSCUpdater():
 					for k2,v2 in versionTableData.items():
 						MCSC_Cursor.execute("INSERT INTO fabricVersion_Table (version,compatiableMinecraftVersions) VALUES (?,?)", (k2,str(v2)))
 					
-					print("[Minerva Server Crafter - Updater - Fabric Version Check]: Version Table has been successfully updated. Rebooting...")
+					print("[Minerva Server Crafter - Updater - Fabric Version Check]: Version Table has been successfully updated.")
 					MCSCDatabase.commit()
 					MCSC_Cursor.close()
 					MCSCDatabase.close()
-					os.execl(sys.executable,sys.executable,*sys.argv)
+					if hadupdate == True:
+						result = tuple((int(totalupdates),hadupdate))
+					return result
 				else:
+					result = tuple((0,False))
 					print("[Minerva Server Crafter - Updater - Fabric Version Check]: No new Fabric Versions detected")
-					return
+					return result
 
 class ServerVersion_Control():
 	'Utility for identifying/managing Minecraft Server Versions'
@@ -1113,6 +1305,7 @@ class ServerVersion_Control():
 	def generateVersionListByServerType(servertype=None,minecraftversion=None) -> list:
 		'Returns a list of versions of the server type based on the minecraft version'
 		global ServerType
+		os.chdir(str(rootFilepath))
 		if servertype is not None:
 			if servertype in ServerType:
 				if servertype == "server":
@@ -1163,6 +1356,7 @@ class ServerVersion_Control():
 	def isVersion(parseVersion):
 		"Checks for specified version in the minecraft version table. Returns True if the version exists. Otherwise, returns false"
 		#fetch the version list from the database file
+		os.chdir(str(rootFilepath))
 		MCSCDatabase = sqlite3.connect("mcsc_data.db")
 		MCSC_Cursor = MCSCDatabase.cursor()
 		MCSC_Cursor.execute("SELECT version FROM minecraftversion_Table")
@@ -1182,6 +1376,7 @@ class ServerVersion_Control():
 		Downloads server.jar based on the specified version. The downloaded jar is saved in base/build/Minecraft Vanilla/(version number here)
 
 		'''
+		os.chdir(str(rootFilepath))
 		if os.path.isdir(str(rootFilepath) + "/base/sandbox/build/Minecraft Vanilla") == False:
 			os.mkdir(str(rootFilepath) + "/base/sandbox/build/Minecraft Vanilla")
 		if os.path.isdir(str(rootFilepath) + f"/base/sandbox/build/Minecraft Vanilla/{version}") == False:
@@ -1228,6 +1423,7 @@ class ServerVersion_Control():
 	
 	def getVersionList():
 		'Returns a list of Minecraft Vanilla Versions'
+		os.chdir(str(rootFilepath))
 		MCSCDatabase = sqlite3.connect("mcsc_data.db")
 		MCSC_Cursor = MCSCDatabase.cursor()
 		MCSC_Cursor.execute('SELECT version FROM minecraftversion_Table ORDER BY timestampRelease DESC')
@@ -1373,6 +1569,123 @@ class ServerFileIO():
 		ServerJarSelection = None
 		WhitelistPlayers_SearchThread = None
 	
+	class debugInfo():
+		def outputJSONProperties():
+			'Displays the properties.json into the console'
+			with open(str(rootFilepath) + "/properties.json","r") as propertiesFile:
+				jsonDump = json.load(propertiesFile)
+				propertiesFile.close()
+			print(jsonDump)
+			return
+
+	class OnModAccess():
+		'Utility for reading Internal Mod Data. When this is called, nothing is being change from within the mod itself. Data being fetched is in read-only mode.'
+		def __init__(self):
+			#We need the last loaded instance
+			self.instancedata_raw = ServerFileIO.getLastConfigData()
+			self.instanceName = self.instancedata_raw["id"]
+			self.category = self.instancedata_raw["category"]
+		
+		def readForgeMod(self,modName=None):
+			'Constructs Data. Reads the mods.toml file of the given mod. Returns the data as a dictionary'
+			#Check if its using legacy logic
+			instanceData = ServerFileIO.getJSONInstanceDatabyName(instanceName=self.instanceName)
+			legacyBool = instanceData["legacy-launch"]["forceToDirectory"]
+			if legacyBool == True:
+				#Get the server directory
+				serverdirectory_root = instanceData["legacy-launch"]["serverDirectory"]
+			if legacyBool == False:
+				#Using the internal server directory structure
+				serverdirectory_root = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{str(self.instanceName)}/"
+			modsDirectory = os.path.join(str(serverdirectory_root),"/mods")
+			with zipfile.ZipFile(str(modsDirectory) + f"/{modName}.jar","r") as modJarArchive:
+				with modJarArchive.open("META-INF/mods.toml","r") as modTOML:
+					configData = toml.load(modTOML)
+					modTOML.close()
+				modJarArchive.close()
+			resultDict = {}
+			#Get the mods section
+			modData = configData.get('mods',[])
+			for mod in modData:
+				modID = mod.get('modId','Unknow-modID')
+				version = mod.get('version','Unknown-version')
+				displayName = mod.get('displayName','Unknown-name')
+				authors = mod.get('authors','Unknown-authors')
+				description = mod.get('description','No given description')
+				logo = mod.get('logoFile',None)
+				license_ = mod.get('license','Unknown-license')
+
+				resultDict[modName] = {'modId': modID, 'version': version, 'displayName': displayName, 'authors': authors, 'description': description, 'logoFile': logo, 'license': license_}
+			return resultDict
+		
+		def readFabricMod(self,modName=None):
+			'Constructs Data. Reads the fabric.mod.json from the given mod. Returns the data as a dictionary'
+			#Check if its using legacy logic
+			instanceData = ServerFileIO.getJSONInstanceDatabyName(instanceName=self.instanceName)
+			legacyBool = instanceData["legacy-launch"]["forceToDirectory"]
+			if legacyBool == True:
+				#get the server directory
+				serverdirectory_root = instanceData["legacy-launch"]["serverDirectory"]
+			if legacyBool == False:
+				#use the internal sandbox server enviroment
+				serverdirectory_root = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{self.instanceName}"
+			modsDirectory = os.path.join(str(serverdirectory_root),"/mods")
+			with zipfile.ZipFile(str(modsDirectory) + f"{modName}.jar","r") as modJarFile:
+				with modJarFile.open("fabric.mod.json","r") as fabricData:
+					fabricModData = json.load(fabricData)
+					fabricData.close()
+				modJarFile.close()
+			resultDict = {}
+			modID = fabricModData["id"]
+			version = fabricModData["version"]
+			name = fabricModData["name"]
+			description = fabricModData["authors"]
+			license_ = fabricModData["license"]
+			icon = fabricModData["icon"]
+			resultDict[modName] = {'modId': modID, 'version': version, 'name': name, 'description': description, 'license': license_, 'icon': icon}
+			return resultDict
+		
+	def getLastConfigData():
+		#Get the last config data
+		with open(str(rootFilepath) + "/properties.json","r") as jsondata:
+			data = json.load(jsondata)
+			jsondata.close()
+		lastconfig = data['Instances']['last-config']
+		return lastconfig
+	
+	class JSONModelUtils:
+		'Utilities that involves the properties.json'
+		def __init__(self):
+			self.currentModel = None
+		
+		def onModelCapture(self):
+			'Snapshots the data currently stored in properties.json and sets it as the current model'
+			#Ensure we are in the root directory
+			os.chdir(rootFilepath)
+			with open(str(rootFilepath) + "/properties.json","r") as jsonData:
+				dataDump = json.load(jsonData)
+				jsonData.close()
+			self.currentModel = dataDump
+			return
+		
+		def getCurrentModel(self):
+			return self.currentModel
+		
+		def rollbackModel(self):
+			if not self.currentModel:
+				raise MCSCInternalError("Take a snapshot of the current JSON Model first")
+			else:
+				#Ensure we are in the root directory
+				os.chdir(rootFilepath)
+				#Delete the properties.json
+				filepath = str(rootFilepath) + "/properties.json"
+				os.remove(filepath)
+				#Recreate the properties.json
+				with open(str(rootFilepath) + "/properties.json","w") as jsonFile:
+					json.dump(self.currentModel,jsonFile,indent=4)
+				print("[Minerva Server Crafter - JSONModelUtils]: Successfully rolled back the JSON Model to its last captured state.")
+				return
+
 	def getInstanceMinecraftVersion(instanceName=None):
 		'Returns the Minecraft Version that the given instance is using'
 		if instanceName is not None:
@@ -1389,21 +1702,27 @@ class ServerFileIO():
 				rawJSONData.close()
 		return minecraftversion
 
-	def onExit_setInstancePointer(instanceName=None):
+	def onExit_setInstancePointer(instanceName=None,category=None):
 		'Handler for setting the last loaded instance when Minerva Server Crafter closes'
 		#We need point to an instance
-		with open(str(rootFilepath) + "/properties.json", "r+") as jsonPointer:
-			datadump = json.load(jsonPointer)
-			instances = datadump["Instances"]
-			for category in ["Vanilla","Modded"]:
+		JSONModel.onModelCapture()
+		try:
+			with open(str(rootFilepath) + "/properties.json", "r+") as jsonPointer:
+				datadump = json.load(jsonPointer)
+				instances = datadump["Instances"]
 				for instance in instances[category]:
 					if instanceName in instance:
 						instances["last-config"]["id"] = str(instanceName)
+						instances["last-config"]["category"] = str(category)
 						jsonPointer.seek(0)
 						json.dump(datadump,jsonPointer,indent=4)
 						jsonPointer.close()
 						return
-
+		except json.JSONDecodeError:
+			#Roll it back
+			JSONModel.rollbackModel()
+			ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category=str(category))
+			return
 	def onBoot_loadInstance():
 		'Handler for loading the last loaded instance properties at startup'
 		#We need to get the name of the instance from the last loaded instances
@@ -1422,63 +1741,58 @@ class ServerFileIO():
 			jsonPoint.close()
 		return
 	
-	def loadJSONProperties(instanceName=None):
+	def loadJSONProperties(instanceName=None,category=None):
 		"""Loads properties.json data and updates the MinecraftServerProperties JSON Model in memory for a specific instance
-		
-		Parameters:
 
+		Parameters:
 		instanceName : The name of the instance to be loaded
+		category: The category the instance is under
 		"""
-		#Load the json file
-		with open(str(rootFilepath) + "/properties.json","r") as readJSON:
-			dataDump = json.load(readJSON)
-			#Search for the instance
-			instances = dataDump["Instances"]
-			for category in ["Vanilla","Modded"]:
-				for instance in instances[category]:
-					if instanceName in instance:
-						for key,val in instance[instanceName]["properties"].items():
-							MinecraftServerProperties[key] = val if val else None
-						print(f"[Minerva Server Crafter]: Properties for {instanceName} loaded. Rebuilding...")
-						#Statically set the IP
-						MinecraftServerProperties["server-ip"] = str(InternetHost.getIPV4())
-						#Apply update
-						MinecraftServerProperties.update()
-						print("[Minerva Server Crafter]: Structure Rebuilt Successfully")
-						ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
-						return
-					else:
-						continue
-				return
+		#We need to access the data from file
+		#Put this in the notification area
+		global notificationHandler
+
+		jsonModelNotificationHandle = windows_toasts.Toast(text_fields=["Loading JSON Model..."],duration=windows_toasts.ToastDuration.Short)
+		notificationHandler.show_toast(jsonModelNotificationHandle)
+		print(f"[Minerva Server Crafter]: Loading JSON Model for {instanceName} under {category}...")
+		with open(str(rootFilepath) + "/properties.json","r") as jsonAccess:
+			jsonDump = json.load(jsonAccess)
+			jsonAccess.close()
+		instances = jsonDump['Instances']
+		for instance in instances[str(category)]:
+			if instanceName in instance:
+				#Now put the properties data in the dictionary
+				propertiesData = instance[str(instanceName)]['properties']
+				for key,val in propertiesData.items():
+					if val == "":
+						val = None
+					MinecraftServerProperties[key] = val
+					continue
+		ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category=str(category))
+		MinecraftServerProperties["server-ip"] = str(InternetHost.getIPV4())
+		MinecraftServerProperties.update()
+		postJSONModelLoad = windows_toasts.Toast(text_fields=[f"{instanceName} has been loaded."])
+		notificationHandler.show_toast(postJSONModelLoad)
+		print(f"[Minerva Server Crafter]: JSON Model for {instanceName} has been successfully loaded.")
+		return
 	
-	def exportPropertiestoJSON(instanceName=None,alternativeDict=None):
+	def exportPropertiestoJSON(instanceName=None,category=None,alternativeDict=None):
 		"""
 		Saves the data from memory to properties.json under instanceName
 
 		"""
+
 		print(f"[Minerva Server Crafter]: Saving properties for {instanceName}...")
 		with open(str(rootFilepath) + "/properties.json","r+") as jsonWrite:
 			datadump = json.load(jsonWrite)
-			vanillaInstances = datadump["Instances"]["Vanilla"]
-			moddedInstances = datadump["Instances"]["Modded"]
-			for instanceVanillaCheck in vanillaInstances:
-				if instanceName in vanillaInstances:
+			instanceSaving = datadump['Instances'][str(category)]
+			for instanceCheck in instanceSaving:
+				if instanceName in instanceCheck:
 					if alternativeDict is not None:
-						instanceVanillaCheck[instanceName]["properties"] = alternativeDict
+						instanceCheck[instanceName]["properties"] = alternativeDict
 						break
 					else:
-						instanceVanillaCheck[instanceName]["properties"] = MinecraftServerProperties
-						break
-				else:
-					break
-
-			for instanceModdedCheck in moddedInstances:
-				if instanceName in moddedInstances:
-					if alternativeDict is not None:
-						instanceModdedCheck[instanceName]["properties"] = alternativeDict
-						break
-					else:
-						instanceModdedCheck[instanceName]["properties"] = MinecraftServerProperties
+						instanceCheck[instanceName]["properties"] = MinecraftServerProperties
 						break
 				else:
 					break
@@ -1562,7 +1876,7 @@ class ServerFileIO():
 										jsonWriting.truncate()
 										jsonWriting.close()
 									print(f"[Minerva Server Crafter]: Import successful to JSON Model and created entry for {instanceName} to file.")
-									ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
+									ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category="Modded")
 									return
 							else:
 								if create_data_ok == False and legacyBehavior == True:
@@ -1590,12 +1904,12 @@ class ServerFileIO():
 											jsonWriting.truncate()
 											jsonWriting.close()
 										print(f"[Minerva Server Crafter]: Import successful to JSON Model and created entry for {instanceName} to file.")
-										ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
+										ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category="Modded")
 										return
 				
 								else:
-									ServerFileIO.exportPropertiestoJSON(instanceName=str(instanceName))
-									ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
+									ServerFileIO.exportPropertiestoJSON(instanceName=str(instanceName),category="Modded")
+									ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category="Modded")
 									return
 					else:
 						if create_data_ok == True and legacyBehavior == False:
@@ -1613,7 +1927,7 @@ class ServerFileIO():
 									jsonWriting.truncate()
 									jsonWriting.close()
 								print(f"[Minerva Server Crafter]: Import successful to JSON Model and created entry for {instanceName} to file.")
-								ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
+								ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category="Vanilla")
 								return
 						else:
 							if create_data_ok == False and legacyBehavior == True:
@@ -1632,16 +1946,16 @@ class ServerFileIO():
 										jsonWriting.truncate()
 										jsonWriting.close()
 									print(f"[Minerva Server Crafter]: Import successful to JSON Model and created entry for {instanceName} to file.")
-									ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
+									ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category="Vanilla")
 									return
 
 							else:
-								ServerFileIO.exportPropertiestoJSON(instanceName=str(instanceName))
-								ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
+								ServerFileIO.exportPropertiestoJSON(instanceName=str(instanceName),category="Vanilla")
+								ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category="Vanilla")
 								return
 
 	def scanJarForServerType():
-		'scanJarForServerType() -> Search Query \n \n Searches the current jar file for the type of server it is'
+		'scanJarForServerType() -> Search Query \n \n Searches the current jar file for the type of server it is. --DEPRECATED--'
 		global ServerJarSelection
 		data_set = {}
 		with zipfile.ZipFile(str(ServerJarSelection.getFilepathString()),"r") as currentWorkingJar:
@@ -1759,17 +2073,19 @@ class ServerFileIO():
 			MCSCDatabase.rollback()
 			return
 	
-	def importWhitelistfromJSON():
+	def importWhitelistfromJSON(filepath=None):
 		'importWhitelistfromJSON() -> JSON Query \n \n Logic for importing the whitelist.json to the whitelist_Table in the Database file'
 		#We need to get the whitelist from json
 		global ServerJarSelection
 		global ConsoleWindow
+		global root_tabs
 
 		MCSCDatabase = sqlite3.connect("mcsc_data.db")
 		MCSC_Cursor = MCSCDatabase.cursor()
+		root_tabs.set("Console Shell")
 		#We need the server directory in order to get the whitelist.json
 		ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Importing whitelist JSON...")
-		whitelistFileDirectory = ServerJarSelection.getcurrentpath()
+		whitelistFileDirectory = filepath
 		with open(str(whitelistFileDirectory) + "/whitelist.json","r") as whitelistJson:
 			datadump = json.load(whitelistJson)
 			if datadump:
@@ -1798,16 +2114,71 @@ class ServerFileIO():
 			whitelistJson.close()
 		return
 	
+	def zipnameToModpack(instanceName=None):
+		'Turns the zip filename to the name of the Modpack. This ensures proper filenames thats in the Modpacks folder'
+		checkInstanceVal = False
+		if instanceName is not None:
+			#Check if we have the instance
+			with open(str(rootFilepath) + "/properties.json","r") as fileJSON:
+				jsonDump = json.load(fileJSON)
+				fileJSON.close()
+			
+			for instance in jsonDump['Instances']['Modded']:
+				if instanceName in instance:
+					checkInstanceVal = True
+					break
+				else:
+					if instanceName not in instance:
+						#We need to continue the search
+						continue
+			if checkInstanceVal == True:
+				#We can proceed with the search. Searching modpack data...
+				modpackData_modpackindex = ModpackIndexClass.searchModpack(modpackName=str(instanceName))
+				curseforgeData = modpackData_modpackindex[0]['curse_info']
+				curseforgeID = curseforgeData['curse_id']
+				modpackData_curseforge = CurseforgeClass.parseprojectID(projectID=curseforgeID)
+				newDirectoryName = modpackData_curseforge['name']
+				#Generate FileIDs for the modpack
+				fileID_list = [id_obj['id'] for id_obj in modpackData_curseforge['latestFiles']]
+				#Parse the list
+				filenames = []
+				for item in fileID_list:
+					fileIDQuery = CurseforgeClass.parsefileIDByModID(modID=curseforgeID,fileID=item)
+					#Get the filename
+					filenameArchive = fileIDQuery['fileName']
+					#Remove the extension
+					resultName = os.path.splitext(filenameArchive)[0]
+					filenames.append(resultName)
+				#We need to navigate the Modpacks directory
+				modpacksdir = os.path.join(str(rootFilepath),"base/sandbox/Instances/Modpacks")
+				os.chdir(modpacksdir)
+				for root,dirs,files in os.walk(modpacksdir):
+					for dir_ in dirs:
+						if dir_ in filenames:
+							#Modpack Root directory found, but its the zip name. Fixing...
+							dirPath = pathlib.Path(os.path.join(root,dir_))
+							newPath = dirPath.parent / newDirectoryName
+							dirPath.rename(newPath)
+							break
+						else:
+							continue
+				return
+
+			else:
+				print(f'[Minerva Server Crafter]: {instanceName} not found. Raising Exception...')
+				raise MCSCInternalError(f"Search Exception. Cannot find {instanceName} in json properties. Perhaps it has not been imported yet?")
+	
 	def writemcEULA(instanceName=None):
 		'Generates the eula.txt file, and sets it to true'
 		if instanceName is not None:
 			# We need to lookup the instance to see if there is a profile made
 			with open(os.path.join(rootFilepath, "properties.json"), 'r') as instanceLookup:
 				jsonDump = json.load(instanceLookup)
+				instanceLookup.close()
 			
 			folderPath = None
 			for category in ['Vanilla', 'Modded']:
-				for instance in jsonDump[category]:
+				for instance in jsonDump['Instances'][category]:
 					if instanceName in instance:
 						# Are we using legacy behavior?
 						if instance[instanceName]['legacy-launch']['forceToDirectory'] == True:
@@ -1821,17 +2192,17 @@ class ServerFileIO():
 						break
 				if folderPath:
 					break
-				
 			if folderPath and os.path.isdir(folderPath):
 				with open(os.path.join(folderPath, "eula.txt"), "w") as eulafile:
 					eulafile.write("#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\n#Wed Jun 12 07:54:40 EDT 2024\neula=true")
+					eulafile.close()
 				return 200
 			else:
 				return 404
 		else:
 			raise ValueError("Instance name must be provided")
 	
-	def exportWhitelistfromDatabase():
+	def exportWhitelistfromDatabase(serverdir=None):
 		'exportWhitelistfromDatabase() -> Database Query \n \n Logic for exporting the whitelist_Table in the Database file to whitelist.json'
 		global ConsoleWindow
 
@@ -1846,7 +2217,7 @@ class ServerFileIO():
 			whitelist[str(name)] = str(uuid)
 		#We need to then turn it into a list
 		formattedwhitelist = [{"uuid": uuid, "name": name} for name, uuid in whitelist.items()]
-		serverdirectory = ServerJarSelection.getcurrentpath()
+		serverdirectory = serverdir
 		with open(str(serverdirectory) + "/whitelist.json","w") as whitelistWrite:
 			json.dump(formattedwhitelist,whitelistWrite,ensure_ascii=False,indent=4)
 			whitelistWrite.close()
@@ -1943,7 +2314,7 @@ class ServerFileIO():
 				ConsoleWindow.updateConsole(END,"Mojang API Error - Additional Information\n =================== \n" + str(errorInformation))
 			return
 		
-	def importplayerBansFromJSON():
+	def importplayerBansFromJSON(filepath=None):
 		'importplayerBansFromJSON() -> JSON Query \n \n Logic for importing banned-players json file to bannedPlayers_Table in the database file.'
 		global ServerJarSelection
 		global ConsoleWindow
@@ -1951,7 +2322,7 @@ class ServerFileIO():
 		MCSC_Cursor = MCSCDatabase.cursor()
 
 		#We need the server directory
-		serverDir = ServerJarSelection.getcurrentpath()
+		serverDir = filepath
 		with open(str(serverDir) + "/banned-players.json","r") as bannedPlayersJSON:
 			payloadData = json.load(bannedPlayersJSON)
 			if payloadData:
@@ -1975,15 +2346,14 @@ class ServerFileIO():
 		MCSCDatabase.close()
 		return
 	
-	def exportplayerBansToJSON():
+	def exportplayerBansToJSON(serverpath=None):
 		'exportplayerBansToJSON() -> Database Query \n \nLogic for exporting the bannedPlayers_Table to banned-players JSON file'
 		#Get the player bans table from database
-		global ServerJarSelection
 		global ConsoleWindow
 		MCSCDatabase = sqlite3.connect("mcsc_data.db")
 		MCSC_Cursor = MCSCDatabase.cursor()
 
-		serverDir = ServerJarSelection.getcurrentpath()
+		serverDir = serverpath
 		bannedPlayers = []
 		ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Exporting player bans table...")
 		MCSC_Cursor.execute("SELECT uuid, name, created, source, expires, reason FROM bannedPlayers_Table")
@@ -2023,7 +2393,7 @@ class ServerFileIO():
 			ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: " + str(PlayerName) + " isn't found in the Ban Table.")
 			return
 	
-	def importIPBansFromJSON():
+	def importIPBansFromJSON(serverpath=None):
 		'importIPBansFromJSON() -> JSON Query \n \n Logic for importing banned-ips JSON file to bannedIPs_Table in the database file'
 		global ServerJarSelection
 		global ConsoleWindow
@@ -2031,7 +2401,7 @@ class ServerFileIO():
 		MCSC_Cursor = MCSCDatabase.cursor()
 
 		ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Importting IP bans from JSON...")
-		serverDirectory = ServerJarSelection.getcurrentpath()
+		serverDirectory = serverpath
 		with open(str(serverDirectory) + "/banned-ips.json","r") as bannedipsRead:
 			banned_ips = json.load(bannedipsRead)
 			if banned_ips:
@@ -2054,7 +2424,7 @@ class ServerFileIO():
 			bannedipsRead.close()
 		return
 	
-	def exportIPBansToJSON():
+	def exportIPBansToJSON(serverpath=None):
 		'exportIPBansToJSON() -> Database Query \n \n Logic for exporting bannedIPs_Table in the database file to banned-ips JSON file.'
 		global ServerJarSelection
 		global ConsoleWindow
@@ -2062,7 +2432,7 @@ class ServerFileIO():
 		MCSC_Cursor = MCSCDatabase.cursor()
 
 		ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Exportting IP Bans Table...")
-		serverdirectory = ServerJarSelection.getcurrentpath()
+		serverdirectory = serverpath
 		selectQuery = "SELECT ip, created, source, expires, reason FROM bannedIPs_Table"
 		MCSC_Cursor.execute(selectQuery)
 		data = MCSC_Cursor.fetchall()
@@ -2175,7 +2545,7 @@ class ServerFileIO():
 		MCSCDatabase.close()
 		return
 	
-	def newServerInstance(name,version:str=minecraftVersions[0], servertype:str=ServerType[0],serverDirectory:str=None):
+	def newServerInstance(name,version=None, servertype=None,serverDirectory=None):
 		'Creates an Server instance in Minerva Server Crafter. You must provide a name of the instance, minecraft version, a server type, and a server directory. When any of the given values can\'t find them in their respective list, a ValueError Exception is raised. When all of the values are in the lists, it adds the values to the database table.'
 		global ConsoleWindow
 		MCSCDatabase = sqlite3.connect("mcsc_data.db")
@@ -2213,52 +2583,35 @@ class ServerFileIO():
 			MCSC_Cursor.close()
 			MCSCDatabase.close()
 			return
-	
-	def addInstancetoJSON(name=None, serverType=None, isModded=False, modlist=[], modloaderversion=None, enforcelegacy=False, serverpath_legacy=None, minecraftversion=None):
+
+	def addInstancetoJSON(name=None, serverType=None, isModded=False, modlist=[], modloaderversion=None, enforcelegacy=False, serverpath_legacy=None, minecraftversion=None,propertiesDict=None):
 		'Adds instance to properties.json'
-		if name is not None and minecraftversion is not None and serverType is not None:
-			instance_name = str(name)
-			mcversion = str(minecraftversion)
-			if isModded == False:
-				# It's a vanilla server
-				category = "Vanilla"
-				if serverType in ["spigot", "craftbukkit", "purpur"]:
-					servertype = str(serverType)
-				if enforcelegacy == False:
-					# We don't need to fill out the server directory
-					legacyBool = False
-					serverpath = None
-				else:
-					if enforcelegacy == True:
-						legacyBool = True
-						serverpath = str(serverpath_legacy)
-			else:
-				if isModded == True:
-					if serverType == "vanilla":
-						raise ValueError("Parameter Conflict. Must set isModded to False")
-					else:
-						category = "Modded"
-						if serverType in ["fabric", "forge"]:
-							servertype = str(serverType)
-							if serverType == "forge":
-								forgeBool = True
-								modloader_version = str(modloaderversion)
-								serverjarpathing = f"base/sandbox/Instances/Modpacks/{instance_name}/libraries/net/minecraftforge/forge/{mcversion}-{modloader_version}"
-							else:
-								forgeBool = False
-								modloader_version = str(modloaderversion)
-								serverjarpathing = None
-							# Remove extensions from modlist
-							modlisting = [mod[0] for mod in modlist]
-							if enforcelegacy == False:
-							    # We don't need to fill out the server directory
-								legacyBool = False
-								serverpath = None
-							else:
-								if enforcelegacy == True:
-									legacyBool = True
-									serverpath = str(serverpath_legacy)
-		# Now we can hand the data off to the properties.json
+		if name is None or minecraftversion is None or serverType is None:
+			raise ValueError("Required parameters are missing")
+
+		instance_name = str(name)
+		mcversion = str(minecraftversion)
+
+		if not isModded:
+			category = "Vanilla"
+			if serverType in ["spigot", "craftbukkit", "purpur"]:
+				typeServer = str(serverType)
+			legacyBool = enforcelegacy
+			serverpath = str(serverpath_legacy) if enforcelegacy else None
+		else:
+			if serverType == "vanilla":
+				raise ValueError("Parameter Conflict. Must set isModded to False")
+			category = "Modded"
+			if serverType in ["fabric", "forge"]:
+				typeServer = str(serverType)
+				forgeBool = (serverType == "forge")
+				modloader_version = str(modloaderversion)
+				serverjarpathing = f"base/sandbox/Instances/Modpacks/{instance_name}/libraries/net/minecraftforge/forge/{mcversion}-{modloader_version}" if forgeBool else None
+				modlisting = [mod for mod in modlist]
+				legacyBool = enforcelegacy
+				serverpath = str(serverpath_legacy) if enforcelegacy else None
+
+		# Load the existing JSON file
 		file_path = os.path.join(str(rootFilepath), "properties.json")
 		if os.path.exists(file_path):
 			with open(file_path, "r") as newEntry:
@@ -2269,25 +2622,31 @@ class ServerFileIO():
 		else:
 			jsondump = {"Instances": {"Vanilla": [], "Modded": []}}
 
-		if isModded == False:
-			# Insert new data
-			legacyData = {'forceToDirectory': legacyBool, 'serverDirectory': str(serverpath)}
-			propertiesData = {}
+		# Update or add the new instance data
+		if not isModded:
+			legacyData = {'forceToDirectory': legacyBool, 'serverDirectory': serverpath}
+			#We need the server.properties data for the specific version
+			propertiesData = ServerFileIO.usePropertiesByMinecraftVersion(minecraftVersion=mcversion)
 			entryData_raw = {'minecraftVersion': str(mcversion), 'legacy-launch': legacyData, 'properties': propertiesData}
-			# Attach the name to this entry data
-			jsondump['Instances'][category].append({str(instance_name): entryData_raw})
 		else:
-			if isModded == True:
-				modloaderData = {'id': servertype, 'version': modloader_version, 'serverjar_filepath': serverjarpathing, 'isForge': forgeBool, 'modlisting': modlisting}
-				legacyData = {'forceToDirectory': legacyBool, 'serverDirectory': serverpath}
-				propertiesData = {}
-				entryData_raw = {'minecraftVersion': mcversion, 'modloader': modloaderData, 'legacy-launch': legacyData, 'properties': propertiesData}
-				jsondump['Instances'][category].append({str(instance_name): entryData_raw})
-		
-		print(jsondump)
+			modloaderData = {'id': typeServer, 'version': modloader_version, 'serverjar_filepath': serverjarpathing, 'isForge': forgeBool, 'modlisting': modlisting}
+			legacyData = {'forceToDirectory': legacyBool, 'serverDirectory': serverpath}
+			propertiesData = ServerFileIO.usePropertiesByMinecraftVersion(minecraftVersion=mcversion)
+			entryData_raw = {'minecraftVersion': mcversion, 'modloader': modloaderData, 'legacy-launch': legacyData, 'properties': propertiesData}
 
-		with open(file_path, "w") as newEntry:
-			json.dump(jsondump, newEntry, indent=4)
+		# Check for existing instance and update or append
+		existing_instance = next((item for item in jsondump['Instances'][category] if instance_name in item), None)
+		if existing_instance:
+			# Update existing instance
+			existing_instance[instance_name] = entryData_raw
+		else:
+			# Add new instance
+			jsondump['Instances'][category].append({str(instance_name): entryData_raw})
+
+		# Save the updated JSON file (overwrite completely)
+		with open(file_path, "w") as propertiesFileOperation:
+			json.dump(jsondump, propertiesFileOperation, indent=4)
+
 		return
 
 	
@@ -2344,12 +2703,20 @@ class ServerFileIO():
 			if os.path.isfile(str(askPropertiesFile) + "/server.properties") == False:
 				raise FileNotFoundError("[Minerva Server Crafter]: [Error-32] Server.properties does not exist. This usually means either its a new server, or user did not give the correct path")
 			else:
-				ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Loading server.properties to JSON Model...")
-				ServerFileIO.importpropertiestojson(instanceName=str(instanceName),serverjarpath=str(askPropertiesFile),create_data_ok=False)
-				ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
-				ServerFileIO.loadJSONProperties(instanceName=ServerFileIO.getLastConfig())
-				ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: JSON Model has been updated, and values has been updated.")
-				return
+				if os.path.isdir(str(askPropertiesFile) + "/libraries/net/minecraftforge") == True:
+					ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Loading server.properties to JSON Model...")
+					ServerFileIO.importpropertiestojson(instanceName=str(instanceName),serverjarpath=str(askPropertiesFile),create_data_ok=False)
+					ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category="Modded")
+					ServerFileIO.loadJSONProperties(instanceName=ServerFileIO.getLastConfig())
+					ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: JSON Model has been updated, and values has been updated.")
+					return
+				else:
+					ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Loading server.properties to JSON Model...")
+					ServerFileIO.importpropertiestojson(instanceName=str(instanceName),serverjarpath=str(askPropertiesFile),create_data_ok=False)
+					ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName),category="Vanilla")
+					ServerFileIO.loadJSONProperties(instanceName=ServerFileIO.getLastConfig())
+					ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: JSON Model has been updated, and values has been updated.")
+					return
 		except FileNotFoundError as e:
 			ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Exception raised. Here's a detailed walkthrough below")
 			ConsoleWindow.displayException(e)
@@ -2394,6 +2761,7 @@ class ServerFileIO():
 		if minecraftVersion in availableVersions:
 			dir_path = os.path.join(rootFilepath, f"base/sandbox/build/Minecraft Vanilla/{minecraftVersion}")
 			properties_file = os.path.join(dir_path, "server.properties")
+			os.chdir(str(rootFilepath))
 
 			if os.path.isdir(dir_path) and os.path.exists(properties_file):
 				# Directory and properties file both exist
@@ -2403,7 +2771,9 @@ class ServerFileIO():
 						if line.strip() and not line.startswith("#"):
 							key, val = line.split("=")
 							val = val.strip()
-							if val == "":
+							if key == "server-ip" and val == "":
+								val = str(InternetHost.getIPV4())
+							if key != "server-ip" and val == "":
 								val = None
 							targetedProperties[key] = val
 				return targetedProperties
@@ -2466,7 +2836,9 @@ class ServerFileIO():
 		global root_tabs
 		global instanceView
 
-		ServerFileIO.exportPropertiestoJSON(instanceName=str(instanceName))
+		lastConfigData = ServerFileIO.getLastConfigData()
+		category = lastConfigData['category']
+		ServerFileIO.exportPropertiestoJSON(instanceName=str(instanceName),category=str(category))
 		ConsoleWindow.updateConsole(END,"[Minerva Server Crafter]: Converting JSON Model...")
 		#First we get the Json file data
 		with open(str(rootFilepath) + "/properties.json", "r") as jsonPayload:
@@ -2474,7 +2846,7 @@ class ServerFileIO():
 			jsonPayload.close()
 		payload_dict = {}
 		payload_dict = raw_data
-		del payload_dict['debug'] #Weird inclusion in the json. This inclusion is on Mojangs end. This option was added back in beta 1.9, but then was later removed from the properties file
+		#del payload_dict['debug'] #Weird inclusion in the json. This inclusion is on Mojangs end. This option was added back in beta 1.9, but then was later removed from the properties file
 		#We need to use the variable ServerJarSelection
 		if bypassSaveLocation == False:
 			askSaveLocation = filedialog.askdirectory(initialdir=filepath,parent=root,title="Select Server Directory")
@@ -2654,8 +3026,33 @@ class ServerFileIO():
 			name = datadump["Instances"]["last-config"]["id"]
 			jsonRead.close()
 		return name
-
-
+	
+	def getJSONInstanceDatabyName(instanceName=None):
+		'Returns the details of the instance from the JSON Model'
+		JSONModel.onModelCapture()
+		try:
+			with open(str(rootFilepath) + "/properties.json","r") as jsonproperties:
+				jsondata_raw = json.load(jsonproperties)
+				categories = ["Vanilla", "Modded"]
+				result = None
+				for category in categories:
+					datadump = jsondata_raw["Instances"].get(category,[])
+					for index,instance in enumerate(datadump):
+						if instanceName in instance:
+							result = instance[str(instanceName)]
+							result_category = category
+							tupleResult = result_category, result
+							targetedResult = tuple(tupleResult)
+							break
+						else:
+							continue
+			return targetedResult
+		except json.JSONDecoderError as e:
+			print("[Minerva Server Crafter]: JSON Model integrity compromised. Rolling back to safety... ")
+			ServerFileIO.JSONModelUtils.rollbackModel()
+			#Detailed walkthrough
+			raise MCSCInternalError("JSON Data from properties.json resulted a decoding error. Heres a walkthrough",errors=e)
+		
 
 VersionRelease = str(versionType)
 VersionNumber = str(version_)
@@ -2676,9 +3073,141 @@ if InstalledMemory[1] == "GB":
 	MiniumMemory = 2
 currentMemoryMinimum = int(4)
 currentMemoryMax = int(4)
-
+JSONModel = ServerFileIO.JSONModelUtils()
 
 class MCSC_Framework():
+	def onMainWindow_ScalingWindowEvent(event,window_widget=None):
+		if window_widget is not None:
+			#Account for multiple monitors
+			monitorCheck = MCSC_Framework.onMainWindow_checkWindowPosition_multimonitorMode(window_widget=window_widget)
+			if monitorCheck[0] == True:
+				#Get the resolution of that monitor
+				window_x_root = monitorCheck[2]
+				window_y_root = monitorCheck[3]
+			else:
+				window_x_root = window_widget.winfo_screenwidth()
+				window_y_root = window_widget.winfo_screenheight()
+			#810x293 on a 1920 x 1080 resolution. Dont lock it to a single resolution.
+			#Solution: Scale Factor (Width) = 1920 / current screen width
+			#		   Scale Factor (Height) = 1080 / current screen height
+			#		   New Width = 810 * Scale Factor (Width)
+			#		   New Height = 293 * Scale Factor (Height)
+
+			# Print the current screen resolution for debugging
+			print(f"Screen Resolution: {window_x_root}x{window_y_root}")
+
+			# Invert the scaling logic for smaller screens (larger factor for smaller screens)
+			_ScaleFactor_X_root = 1920 / window_x_root  # Inverted scaling for width
+			_ScaleFactor_Y_root = 1080 / window_y_root  # Inverted scaling for height
+
+			# Print scaling factors for debugging
+			print(f"Scaling Factors: X = {_ScaleFactor_X_root}, Y = {_ScaleFactor_Y_root}")
+
+			# Calculate the new window size with decimals (preserving fractional values)
+			_New_x = 810 * _ScaleFactor_X_root
+			_New_y = 293 * _ScaleFactor_Y_root
+
+			# Print the calculated new window size for debugging (including decimals)
+			print(f"Calculated Window Size: {_New_x}x{_New_y}")
+			time.sleep(1.5)
+			window_widget.after(300,lambda:window_widget.geometry(f"{_New_x}x{_New_y}"))
+			return
+	def onMainWindow_checkWindowPosition_transferwindow(window_widget=None):
+		if window_widget is not None:
+			#Poll the monitors
+			_monitors = screeninfo.get_monitors()
+			#Lets do some stuff
+			_windowPos_x = window_widget.winfo_x()
+			_windowPos_y = window_widget.winfo_y()
+
+			currentMonitor = None
+			for monitor in _monitors:
+				if (monitor.x <= _windowPos_x < monitor.x + monitor.width and monitor.y <= _windowPos_y < monitor.y + monitor.height):
+					currentMonitor = monitor
+					break
+			if currentMonitor:
+				new_monitorIndex = (_monitors.index(currentMonitor) + 1) % len(_monitors)
+				target_monitor = _monitors[new_monitorIndex]
+				new_monitor = MCSC_Framework.onMainWindow_checkWindowPosition_multimonitorMode(window_widget=window_widget)
+				new_monitor_x = new_monitor[2]
+				new_monitor_y = new_monitor[3]
+				#Solution: Scale Factor (Width) = 1920 / current screen width
+				#		   Scale Factor (Height) = 1080 / current screen height
+				#		   New Width = 810 * Scale Factor (Width)
+				#		   New Height = 293 * Scale Factor (Height)
+
+				# Print the current screen resolution for debugging
+				print(f"Screen Resolution: {new_monitor_x}x{new_monitor_y}")
+
+				# Invert the scaling logic for smaller screens (larger factor for smaller screens)
+				_ScaleFactor_X_root = 1920 / new_monitor_x  # Inverted scaling for width
+				_ScaleFactor_Y_root = 1080 / new_monitor_y  # Inverted scaling for height
+
+				# Print scaling factors for debugging
+				print(f"Scaling Factors: X = {_ScaleFactor_X_root}, Y = {_ScaleFactor_Y_root}")
+
+				# Calculate the new window size with decimals (preserving fractional values)
+				_New_x = 810 * _ScaleFactor_X_root
+				_New_y = 293 * _ScaleFactor_Y_root
+
+				# Print the calculated new window size for debugging (including decimals)
+				print(f"Calculated Window Size: {_New_x}x{_New_y}")
+				time.sleep(1.5)
+				window_widget.geometry(f"{_New_x}x{_New_y}")
+			window_widget.after(500,lambda:MCSC_Framework.onMainWindow_checkWindowPosition_transferwindow(window_widget=window_widget))
+
+	def onMainWindow_checkWindowPosition_multimonitorMode(window_widget=None):
+		if window_widget is not None:
+			window_x = window_widget.winfo_x()
+			window_y = window_widget.winfo_y()
+
+			monitors = screeninfo.get_monitors()
+			totalMonitors = len(monitors)
+			if totalMonitors > 1:
+				for monitor in monitors:
+					if (monitor.x <= window_x < monitor.x + monitor.width and monitor.y <= window_y < monitor.y + monitor.height):
+						print(f"Window is on monitor: {monitor.name}")
+						break
+				time.sleep(1.5)
+				return (True,monitor.name,monitor.width,monitor.height)
+			else:
+				return False
+	def onMainWindow_ScalingWindow(window_widget=None):
+		if window_widget is not None:
+			#Account for multiple monitors
+			monitorCheck = MCSC_Framework.onMainWindow_checkWindowPosition_multimonitorMode(window_widget=window_widget)
+			if monitorCheck[0] == True:
+				#Get the resolution of that monitor
+				window_x_root = monitorCheck[2]
+				window_y_root = monitorCheck[3]
+			else:
+				window_x_root = window_widget.winfo_screenwidth()
+				window_y_root = window_widget.winfo_screenheight()
+			#810x293 on a 1920 x 1080 resolution. Dont lock it to a single resolution.
+			#Solution: Scale Factor (Width) = 1920 / current screen width
+			#		   Scale Factor (Height) = 1080 / current screen height
+			#		   New Width = 810 * Scale Factor (Width)
+			#		   New Height = 293 * Scale Factor (Height)
+
+			# Print the current screen resolution for debugging
+			print(f"Screen Resolution: {window_x_root}x{window_y_root}")
+
+			# Invert the scaling logic for smaller screens (larger factor for smaller screens)
+			_ScaleFactor_X_root = 1920 / window_x_root  # Inverted scaling for width
+			_ScaleFactor_Y_root = 1080 / window_y_root  # Inverted scaling for height
+
+			# Print scaling factors for debugging
+			print(f"Scaling Factors: X = {_ScaleFactor_X_root}, Y = {_ScaleFactor_Y_root}")
+
+			# Calculate the new window size with decimals (preserving fractional values)
+			_New_x = 810 * _ScaleFactor_X_root
+			_New_y = 293 * _ScaleFactor_Y_root
+
+			# Print the calculated new window size for debugging (including decimals)
+			print(f"Calculated Window Size: {_New_x}x{_New_y}")
+			time.sleep(1.5)
+			window_widget.after(300,lambda:window_widget.geometry(f"{_New_x}x{_New_y}"))
+			return (_New_x,_New_y)
 	def onMainWindow_openAbout():
 		aboutdlg = AboutDialogWindowClass(root)
 		return
@@ -2688,9 +3217,29 @@ class MCSC_Framework():
 		return
 	def onMainWindow_onExit():
 		#We need to handle the autosaving to prevent data loss
-		currentInstance = ServerFileIO.getLastConfig()
-		ServerFileIO.exportPropertiestoJSON(instanceName=str(currentInstance))
-		ServerFileIO.onExit_setInstancePointer(instanceName=str(currentInstance))
+		currentInstance = ServerFileIO.getLastConfigData()
+		name = currentInstance['id']
+		category = currentInstance['category']
+		ServerFileIO.exportPropertiestoJSON(instanceName=str(name),category=str(category))
+		ServerFileIO.onExit_setInstancePointer(instanceName=str(currentInstance),category=str(category))
+		mcsc_sysExit = SystemExit()
+		#Is the server running?
+		if "process2" in globals():
+			#Terminate the server
+			global process2
+			process2.stdin.write('/stop\n')
+			process2.stdin.flush()
+			print("[Minerva Server Crafter]: Shutting down server...")
+			returncode = process2.wait()
+			mcsc_sysExit.code = returncode
+			if returncode == 0:
+				print(f"[Minerva Server Crafter]: Server was shutdown successfully (Internal Server Process Return Code: {returncode})")
+			else:
+				raise MCSCInternalError(msg=f"Something unexpected happend while trying to close the program (Internal Server Process Return Code: {returncode})")
+		if mcsc_sysExit.code is None:
+			mcsc_sysExit.code = 0
+		mcsc_sysExit.add_note(f"Program has been successfully closed by the user. Return code: {mcsc_sysExit.code}")
+		print(mcsc_sysExit.__notes__[0])
 		root.destroy()
 		sys.exit(0)
 	def onMainWindow_openInstanceSelect():
@@ -2702,6 +3251,10 @@ class MCSC_Framework():
 		return
 	def onMainWindow_openMOTDConfig():
 		motdConfig = MOTDWindow(root)
+		return
+	def onMainWindow_refreshWindowSize(window_widget=None,width=None,height=None):
+		#Window Scaling helper
+		window_widget.geometry(f"{width}x{height}")
 		return
 	def isAdmin():
 		if operatingSystem == "Windows":
@@ -2720,37 +3273,10 @@ class MCSCInternalError(Exception):
 	def __init__(self,msg,errors=None):
 		super().__init__("[Minerva Server Crafter API - Error Reporting]: " + str(msg))
 		self.errors = errors
-		if self.errors != None:
+		if self.errors is not None:
 			raise self.errors
 		else:
 			return
-
-root = CTk()
-root.title("Minerva Server Crafter" + str(releaseVersion))
-root.geometry("620x279")
-root.protocol('WM_DELETE_WINDOW', MCSC_Framework.onMainWindow_onExit)
-root.resizable(False,False)
-#Check the Operating System for the main window icon
-if sys.platform.startswith("win32"):
-	root.iconbitmap(str(rootFilepath) + "/base/ui/minecraftservercrafter.ico")
-if sys.platform.startswith("linux"):
-	root.iconbitmap("@" + str(rootFilepath) + "/base/ui/minecraftservercrafter-icon.xbm")
-if sys.platform.startswith("darwin"):
-	#Unsure if this will work, will pay close attention to Mac Users
-	root.iconbitmap(str(rootFilepath) + "/base/ui/Mac_icon-minecraftservercrafter.icns")
-#We need to put in a tab view
-
-root_tabs = CTkTabview(root,width=250)
-root.rowconfigure(0,weight=1)
-root.columnconfigure(2,weight=1)
-root_tabs.grid(row=0,column=2,sticky="nsew")
-root_tabs.add("Console Shell")
-root_tabs.add("Whitelisting")
-root_tabs.add("Banned Players")
-root_tabs.add("Minerva Server Crafter Settings")
-
-#Statically let the appearance mode to Dark Mode
-set_appearance_mode("dark")
 
 #CustomTkinter classes
 class AboutDialogWindowClass():
@@ -2771,6 +3297,7 @@ class AboutDialogWindowClass():
 		self.aboutTreeview.insert(itemRoot,END,text="Purpur API",iid=122)
 		self.aboutTreeview.insert(itemRoot,END,text="BuildTools",iid=123)
 		self.aboutTreeview.insert(itemRoot,END,text="Mojang API",iid=126)
+		self.aboutTreeview.insert(itemRoot,END,text="Modpack Index API",iid=119)
 		self.aboutTreeview.insert(itemRoot,END,text="Minerva Server Crafter",open=False,iid=127)
 		self.aboutTreeview.insert(127,END,text="Custom Tkinter",open=False,iid=1200)
 		self.aboutTreeview.insert(127,END,text="Python",iid=1202)
@@ -2805,6 +3332,166 @@ class AboutDialogWindowClass():
 			licenseTXT.close()
 		return
 
+class ModImagingClass():
+	def __init__(self,modname=None,serverdir=None,archiveImageName=None,archivePath=None):
+		self.modpath = os.path.join(str(serverdir) + "/mods")
+		self.jarpath = os.path.join(str(self.modpath), f"/{modname}" + ".jar")
+		self.archiveimagePath = str(archivePath)
+		self.imagearchivefullpath = os.path.join(self.archiveimagePath,archiveImageName)
+		with zipfile.ZipFile(str(self.jarpath),"r") as jarArchiveTemp:
+			with jarArchiveTemp.open(str(self.imagearchivefullpath),"r") as rawImage:
+				self.modimageData = rawImage.read()
+				rawImage.close()
+			jarArchiveTemp.close()
+		
+		#Convert to Pillow
+		self.imageStream = io.BytesIO(self.modimageData)
+		self.image = Image.open(self.imageStream)
+
+		self.imageSize = self.image.size
+
+		self.root = CTkImage(dark_image=self.image,size=self.imageSize)
+		return self.root
+
+class InstanceDetailWindow():
+	'Dialog window that displays the attached instance details, along with server management of the instance'
+	def __init__(self,parent,instanceName=None):
+		self.parent = parent
+		if instanceName == None:
+			raise MCSCInternalError("Instance Name is a NoneType Value. Provide the name of the instance")
+		else:
+			#Parse the properties.json for the instance data
+			#Check if its modded or not
+			self.instance_name = str(instanceName)
+			self.category = ServerFileIO.getInstanceCategorybyInstanceName(instanceName=self.instance_name)
+			if self.category == "Modded":
+				self.isModded = True
+			else:
+				self.isModded = False
+			
+			#We can parse additional data
+			self.jsonData = ServerFileIO.getJSONInstanceDatabyName(instanceName=self.instance_name)
+			self.minecraftversion = self.jsonData["minecraftVersion"]
+			if self.isModded == True:
+				self.modloaderData = self.jsonData["modloader"]
+				self.modloaderData_name = self.modloaderData["id"]
+				self.modloaderData_version = self.modloaderData["version"]
+				self.modloaderData_forgeBool = self.modloaderData["isForge"]
+				if self.modloaderData_forgeBool == True and self.modloaderData["serverjar_filepath"] is not None:
+					self.modloaderData_serverjarpath = self.modloaderData["serverjar_filepath"]
+				if self.modloaderData_forgeBool == False and self.modloaderData["serverjar_filepath"] is not None:
+					self.modloaderData_serverjarpath = self.modloaderData["serverjar_filepath"]
+				self.modloaderData_modslist = self.modloaderData["modlisting"]
+			self.legacydata = self.jsonData["legacy-launch"]
+			self.legacydata_strictedserverdirectory = self.legacydata["forceToDirectory"]
+			if self.legacydata_strictedserverdirectory == True:
+				self.legacydata_serverdirectory = self.legacydata["serverDirectory"]
+			
+			#Create Widget
+			self.root = CTkToplevel(self.parent)
+			self.parent.after(200,lambda:self.root.iconbitmap(str(rootFilepath) + "/base/ui/minecraftservercrafter.ico"))
+			self.detailsFrame = CTkFrame(self.root)
+			self.detailsFrame.grid(row=0,column=0)
+			self.minecraftVersionLabel = CTkLabel(self.detailsFrame,text="Using Minecraft Version: ")
+			self.minecraftVersionLabel.grid(row=0,column=0)
+			self.minecraftVersionStringVar = StringVar(value=self.minecraftversion)
+			self.minecraftversionText = CTkLabel(self.detailsFrame,textvariable=self.minecraftVersionStringVar)
+			self.minecraftversionText.grid(row=0,column=1)
+			if self.isModded == True:
+				#We have a mods list to include
+				self.modslistFrame = CTkFrame(self.root)
+				self.modslistFrame.grid(row=0,column=1,rowspan=4)
+				self.modslistListing = CTkListbox(self.modslistFrame)
+				self.modslistListing.pack(fill=BOTH,side=LEFT)
+				self.modData_modloaderNameLabel = CTkLabel(self.detailsFrame,text="Using Modloader: ")
+				self.modData_modloaderNameLabel.grid(row=1,column=0)
+				self.modData_modloaderNameStringVar = StringVar(value=self.modloaderData_name)
+				self.modData_modloaderNameText = CTkLabel(self.detailsFrame,textvariable=self.modData_modloaderNameStringVar)
+				self.modData_modloaderNameText.grid(row=1,column=1)
+				self.modData_modloaderVersionLabel = CTkLabel(self.detailsFrame,text="Modloader Version: ")
+				self.modData_modloaderVersionLabel.grid(row=2,column=0)
+				self.modData_modloaderVersionStringVar = StringVar(value=self.modloaderData_version)
+				self.modData_modloaderVersionText = CTkLabel(self.detailsFrame,textvariable=self.modData_modloaderVersionStringVar)
+				self.modData_modloaderVersionText.grid(row=2,column=1)
+				if self.modloaderData_forgeBool == True:
+					#Include the path
+					self.forgepathLabel = CTkLabel(self.detailsFrame,text="Forge Filepath: ")
+					self.forgepathLabel.grid(row=3,column=0)
+					self.forgepathStringVar = StringVar(value=self.modloaderData_serverjarpath)
+					self.forgepathText = CTkLabel(self.detailsFrame,textvariable=self.forgepathStringVar)
+					self.forgepathText.grid(row=3,column=1)
+					if self.legacydata_strictedserverdirectory == True:
+						self.legacydata_serverdirectoryLabel = CTkLabel(self.detailsFrame,text="Server Directory: ")
+						self.legacydata_serverdirectoryLabel.grid(row=4,column=0)
+						self.legacydata_serverdirectorystringvar = StringVar(value=self.legacydata_serverdirectory)
+						self.legacydata_serverdirectoryText = CTkLabel(self.detailsFrame,textvariable=self.legacydata_serverdirectorystringvar)
+						self.legacydata_serverdirectoryText.grid(row=4,column=1)
+						#Generate the table data
+						self.modTable = ModTabling(instanceTarget=str(instanceName))
+						self.modlogo = None
+
+				self.populateModslist()
+				
+	
+	def updateImageStream(self,modName=None,serverDir=None,ArchiveImgName=None,ArchivePath=None):
+		if self.modlogo is None:
+			del self.modlogo
+		else:
+			self.modlogo.destroy()
+		self.modlogo = ModImagingClass(modname=str(modName),serverdir=str(serverDir),archiveImageName=str(ArchiveImgName),archivePath=str(ArchivePath))
+		return
+	
+	def resetLogo(self):
+		if self.modLogo is not None:
+			self.modlogo.destroy()
+		self.modlogo = None
+		return
+	
+	def populateModslist(self):
+		'Populates the mods list'
+		if self.isModded == True:
+			#We can populate the mod list
+			modlist = self.modloaderData_modslist
+			currentlisting = self.modslistListing.get(0,END)
+			totalitems = len(currentlisting)
+			if totalitems != 0:
+				self.modslistListing.delete(0,END)
+			for item in modlist:
+				self.modslistListing.insert(END,item)
+			return
+		else:
+			raise MCSCInternalError("Internal Error has occured. The instance isnt modded.")
+
+class ModTabling():
+	def __init__(self,instanceTarget=None) -> dict:
+		#We are going to need a couple of things
+		self.instance = str(instanceTarget)
+		if self.instance == None:
+			raise MCSCInternalError("No Instance was given. You must provide a Instance.")
+		else:
+			self.instanceData = ServerFileIO.getJSONInstanceDatabyName(instanceName=self.instance)
+			self.category = ServerFileIO.getInstanceCategorybyInstanceName(instanceName=self.instance)
+			if self.category == "Modded":
+				self.serverType = self.instanceData["modloader"]["id"]
+				self.modlist = self.instanceData["modloader"]["modlisting"]
+				self.modTable = {}
+				indexValue = 1
+				if self.serverType == "fabric":
+					for item in self.modlist:
+						self.returnResult = ServerFileIO.OnModAccess.readFabricMod(modName=item)
+						self.modTable[str(indexVal)] = self.returnResult
+						indexValue += 1
+						continue
+				else:
+					if self.serverType == "forge":
+						for item in self.modlist:
+							self.returnResult = ServerFileIO.OnModAccess.readForgeMod(modName=item)
+							self.modTable[str(indexValue)] = self.returnResult
+							indexValue += 1
+							continue
+			return self.modTable
+				
+						
 class NewInstanceWindowClass():
 	def __init__(self,parent,**kwargs):
 		self.parent = parent
@@ -2814,762 +3501,809 @@ class NewInstanceWindowClass():
 		self.moddedservertypesversions = []
 		self.instancesFolder = str(rootFilepath) + "/base/sandbox/Instances"
 		self.modpacksFolder = str(rootFilepath) + "/base/sandbox/Instances/Modpacks"
+		JSONModel.onModelCapture()
 
-		#Create the widget
-		self.root = CTkToplevel(self.parent)
-		self.rootTabs = CTkTabview(self.root)
-		self.rootTabs.grid(row=0,column=0,sticky="nsew")
-		self.rootTabs.add("Vanilla Server Instances")
-		self.rootTabs.add("Modded Server Instances")
-		self.parent.after(200,lambda:self.root.iconbitmap(str(rootFilepath) + "/base/ui/minecraftservercrafter.ico"))
-		self.root.title("Minerva Server Crafter - Lite Edition - Server Instances")
-		self.root.geometry("880x650")
-		#Treeview of the available vanilla instances
-		self.vanillatreeviewFrame = CTkFrame(self.rootTabs.tab("Vanilla Server Instances"))
-		self.vanillatreeviewFrame.grid(row=0,column=1,ipadx=10,ipady=10)
-		#Treeview widget
-		self.vanillainstanceView = ttk.Treeview(self.vanillatreeviewFrame)
-		self.vanillainstanceView.grid(row=1,column=0,ipadx=100,ipady=200)
-		self.vanillainstanceSelectbtn = CTkButton(self.vanillatreeviewFrame,text="Use Selected Instance",command=lambda:self.attachInstance(widget=self.vanillainstanceView))
-		self.vanillainstanceSelectbtn.grid(row=2,column=0,padx=3,pady=3)
-		self.vanillainstanceView.column("#0",width=200)
-		self.vanillainstanceView.heading("#0",text="Instances")
-		#Details of the instance
-		self.vanillainstanceDetailsFrame = CTkFrame(self.rootTabs.tab("Vanilla Server Instances"))
-		self.vanillainstanceDetailsFrame.grid(row=0,column=0,ipadx=10,padx=10)
-		self.vanillainstanceImageData = CTkImage(dark_image=Image.open(str(rootFilepath) + "/base/ui/default.png"),size=(150,150))
-		self.vanillainstanceImage = CTkLabel(self.vanillainstanceDetailsFrame,text="",image=self.vanillainstanceImageData)
-		self.vanillainstanceImage.grid(row=0,column=0,sticky=EW,columnspan=2,pady=10)
-		self.vanillainstanceName = CTkLabel(self.vanillainstanceDetailsFrame,text="To Begin, Select or create a new instance")
-		self.vanillainstanceName.grid(row=1,column=0,columnspan=2)
-		self.vanillainstancetargetedDirectory = CTkLabel(self.vanillainstanceDetailsFrame,text=" ")
-		self.vanillainstancetargetedDirectory.grid(row=2,column=0)
-		self.vanillainstanceservertype = CTkLabel(self.vanillainstanceDetailsFrame,text=" ")
-		self.vanillainstanceservertype.grid(row=3,column=0)
-		self.vanillainstanceminecraftVersion = CTkLabel(self.vanillainstanceDetailsFrame,text=" ")
-		self.vanillainstanceminecraftVersion.grid(row=4,column=0)
-		#Vanilla Instance creation area
-		self.creationTabsvanilla = CTkTabview(self.vanillainstanceDetailsFrame)
-		self.creationTabsvanilla.grid(row=5,column=0,columnspan=2)
-		self.creationTabsvanilla.add("Create Instance")
-		self.creationTabsvanilla.add("Instance Server Properties")
-		MCSC_Framework.onMainWindow_setTabState(self.creationTabsvanilla,"Instance Server Properties","disabled")
-		self.create_vanillainstanceFrame = CTkFrame(self.creationTabsvanilla.tab("Create Instance"))
-		self.create_vanillainstanceFrame.grid(row=5,column=0,padx=10,pady=10)
-		self.create_vanillainstance_instanceNameLabel = CTkLabel(self.create_vanillainstanceFrame,text="Instance Name: ")
-		self.create_vanillainstance_instanceNameLabel.grid(row=0,column=0,padx=10,pady=10)
-		self.create_vanillainstance_instanceNameEntry = CTkEntry(self.create_vanillainstanceFrame,placeholder_text="HINT: This is what your calling this instance")
-		self.create_vanillainstance_instanceNameEntry.grid(row=0,column=1,ipadx=100,columnspan=2)
-		self.create_vanillainstance_minecraftVersionLabel = CTkLabel(self.create_vanillainstanceFrame,text="Minecraft Server Version: ")
-		self.create_vanillainstance_minecraftVersionLabel.grid(row=1,column=0,padx=10,pady=10)
-		self.create_vanillainstance_minecraftVersionCombo = CTkComboBox(self.create_vanillainstanceFrame,values=self.mcversions)
-		self.create_vanillainstance_minecraftVersionCombo.grid(row=1,column=1,ipadx=100,columnspan=2)
-		self.create_vanillainstance_serverTypeLabel = CTkLabel(self.create_vanillainstanceFrame,text="Server Type: ")
-		self.create_vanillainstance_serverTypeLabel.grid(row=2,column=0,padx=10,pady=10)
-		self.create_vanillainstance_serverTypeCombo = CTkComboBox(self.create_vanillainstanceFrame,values=self.vanillaservertypes)
-		self.create_vanillainstance_serverTypeCombo.grid(row=2,column=1,ipadx=100,columnspan=2)
-		self.create_vanillainstance_serverDirectoryLabel = CTkLabel(self.create_vanillainstanceFrame,text="Server Directory: ")
-		self.create_vanillainstance_serverDirectoryLabel.grid(row=3,column=0,padx=10,pady=10)
-		self.create_vanillainstance_serverDirectoryLabel_directory = CTkLabel(self.create_vanillainstanceFrame,text=" ")
-		self.create_vanillainstance_serverDirectoryLabel_directory.grid(row=3,column=1)
-		self.create_vanillainstance_browseForServerDirectoryBtn = CTkButton(self.create_vanillainstanceFrame,text="Browse")
-		self.create_vanillainstance_browseForServerDirectoryBtn.grid(row=3,column=2,padx=1)
-		self.create_vanillainstance_generateInstanceBtn = CTkButton(self.create_vanillainstanceFrame,text="Generate Instance",command=self.buttonActionVanilla_onClickSubmit)
-		self.create_vanillainstance_generateInstanceBtn.grid(row=4,column=0)
-		self.create_vanillainstance_enforceserverDirectory = CTkCheckBox(self.create_vanillainstanceFrame,text="Strict Server Directory",onvalue=True,offvalue=False)
-		self.create_vanillainstance_enforceserverDirectory.grid(row=4,column=1)
-		#Vanilla Instance Server Properties tab
-		self.vanillaserverPropertiesFrame = CTkFrame(self.creationTabsvanilla.tab("Instance Server Properties"))
-		self.vanillaserverPropertiesFrame.pack(fill=BOTH,expand=True,anchor=W,ipadx=100)
-		self.vanillaserverPropertiesFrame_tabs = CTkTabview(self.vanillaserverPropertiesFrame)
-		self.vanillaserverPropertiesFrame_tabs.pack(fill=BOTH,expand=True,side=RIGHT,)
-		self.vanillaserverPropertiesFrame_tabs.add("World Settings")
-		self.vanillaserverPropertiesFrame_tabs.add("Network & Security")
-		#Action Panel
-		self.vanillaActionPanel = CTkFrame(self.vanillaserverPropertiesFrame)
-		self.vanillaActionPanel.pack(fill=Y,expand=True,side=LEFT)
-		#Server Type Image
-		self.vanillaServerTypeImage = CTkLabel(self.vanillaActionPanel, text="\n\n\n\nSettings Panel\n")
-		self.vanillaServerTypeImage.grid(row=0,column=0,pady=10)
-		self.vanillaImportPropertiesFileBtn = CTkButton(self.vanillaActionPanel,text="Import Settings from File",command=ServerFileIO.importPropertiesfromFile)
-		self.vanillaImportPropertiesFileBtn.grid(row=1,column=0)
-		self.vanillaImportPropertiesFile_tip = CTkToolTip(self.vanillaImportPropertiesFileBtn,"Imports server.properties Settings to JSON Model")
-		self.vanillaSavetoJSONFile = CTkButton(self.vanillaActionPanel,text="Apply Settings to JSON",command=lambda: self.exportToJSONModel(instanceName=str(ServerFileIO.getLastConfig()),useVersion=str(ServerFileIO.getVersionInfoFromLastConfig())))
-		self.vanillaSavetoJSONFile.grid(row=2,column=0)
-		self.vanillaSavetoJSONFile_tip = CTkToolTip(self.vanillaSavetoJSONFile,"Saves the JSON Model to properties.json")
-		self.vanillaConvertJSONData = CTkButton(self.vanillaActionPanel,text="Convert Settings to File",command=lambda:ServerFileIO.convertJSONPropertiestoPropertiesFile(rootFilepath))
-		self.vanillaConvertJSONData.grid(row=3,column=0)
-		self.vanillaConvertJSONData_tip = CTkToolTip(self.vanillaConvertJSONData,"Converts properties.json to server.properties, and saves it into the server directory")
-		#World Settings Tab
-		self.vanilla_WorldSettingsFrame = CTkScrollableFrame(self.vanillaserverPropertiesFrame_tabs.tab("World Settings"))
-		self.vanilla_WorldSettingsFrame.pack(fill=BOTH,expand=True,anchor=W)
-		self.vanilla_WorldNameLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="World Name: ")
-		self.vanilla_WorldNameLabel.grid(row=0,column=0,sticky=E)
-		self.vanilla_WorldNameStringVar = StringVar(value=MinecraftServerProperties.get("level-name"))
-		self.vanilla_WorldNameEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_WorldNameStringVar)
-		self.vanilla_WorldNameEntry.grid(row=0,column=1,sticky=W)
-		self.vanilla_WorldNameEntry_tip = CTkToolTip(self.vanilla_WorldNameLabel,"server.properties setting: 'level-name'")
-		self.vanilla_levelSeedLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="World Seed: ")
-		self.vanilla_levelSeedLabel.grid(row=1,column=0,sticky=E)
-		self.vanilla_levelSeedStringVar = StringVar(value=MinecraftServerProperties.get("level-seed"))
-		self.vanilla_levelSeedEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_levelSeedStringVar)
-		self.vanilla_levelSeedEntry.grid(row=1,column=1,sticky=W)
-		self.vanilla_levelSeedEntry_tip = CTkToolTip(self.vanilla_levelSeedLabel,"server.properties setting: 'level-seed'")
-		self.vanilla_gamemodeList = ["survival","creative","adventure","spectator"]
-		self.vanilla_gamemodeStringVar = StringVar(value=MinecraftServerProperties.get("gamemode"))
-		self.vanilla_gamemodeListLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Gamemode: ")
-		self.vanilla_gamemodeListLabel.grid(row=2,column=0,sticky=E)
-		self.vanilla_gamemodeListComboBox = CTkComboBox(self.vanilla_WorldSettingsFrame,values=self.vanilla_gamemodeList,variable=self.vanilla_gamemodeStringVar)
-		self.vanilla_gamemodeListComboBox.grid(row=2,column=1,sticky=W)
-		self.vanilla_gamemodeList_tip = CTkToolTip(self.vanilla_gamemodeListLabel,"server.properties setting: 'gamemode'")
-		self.vanilla_spawnprotectionRadiusInt = IntVar(value=MinecraftServerProperties.get('spawn-protection'))
-		self.vanilla_spawnprotectionradiusLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Spawn Protection Radius: ")
-		self.vanilla_spawnprotectionradiusLabel.grid(row=3,column=0,sticky=E)
-		self.vanilla_spawnprotectionradiusEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_spawnprotectionRadiusInt)
-		self.vanilla_spawnprotectionradiusEntry.grid(row=3,column=1,sticky=W)
-		self.vanilla_spawnprotection_tip = CTkToolTip(self.vanilla_spawnprotectionradiusLabel,"server.properties setting: 'spawn-protection'")
-		self.vanilla_worldsizeInt = IntVar(value=MinecraftServerProperties.get('max-world-size'))
-		self.vanilla_worldsizeLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="World Size: ")
-		self.vanilla_worldsizeLabel.grid(row=4,column=0,sticky=E)
-		self.vanilla_worldsizeEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_worldsizeInt)
-		self.vanilla_worldsizeEntry.grid(row=4,column=1,sticky=W)
-		self.vanilla_worldsize_tip = CTkToolTip(self.vanilla_worldsizeLabel,"server.properties settings: 'max-world-size'")
-		self.vanilla_worldtypeLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="World Type: ")
-		self.vanilla_worldtypeLabel.grid(row=5,column=0,sticky=E)
-		self.vanilla_worldtypeOptions = ["default","minecraft:normal","minecraft:flat","minecraft:large_biomes","minecraft:amplified","minecraft:single_biome_surface"]
-		self.vanilla_worldtypeStringVar = StringVar(value=MinecraftServerProperties.get("level-type"))
-		self.vanilla_worldtypeComboBox = CTkComboBox(self.vanilla_WorldSettingsFrame,values=self.vanilla_worldtypeOptions,variable=self.vanilla_worldtypeStringVar)
-		self.vanilla_worldtypeComboBox.grid(row=5,column=1,sticky=W)
-		self.vanilla_worldtype_tip = CTkToolTip(self.vanilla_worldtypeLabel,"server.properties setting: 'level-type'")
-		self.vanilla_worldDifficultyVar = StringVar(value=MinecraftServerProperties.get('difficulty'))
-		self.vanilla_worldDifficultyList = ['peaceful','easy','normal','hard']
-		self.vanilla_worldDifficultyComboBox = CTkComboBox(self.vanilla_WorldSettingsFrame,values=self.vanilla_worldDifficultyList,variable=self.vanilla_worldDifficultyVar)
-		self.vanilla_worldDifficultyComboBox.grid(row=6,column=1,sticky=W)
-		self.vanilla_worldDifficultyLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Server Difficulty: ")
-		self.vanilla_worldDifficultyLabel.grid(row=6,column=0,sticky=E)
-		self.vanilla_worldDifficulty_tip = CTkToolTip(self.vanilla_worldDifficultyLabel,"server.properties setting: 'difficulty'")
-		self.vanilla_playercountIntVar = IntVar(value=MinecraftServerProperties.get('max-players'))
-		self.vanilla_playercountLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Player Count: ")
-		self.vanilla_playercountLabel.grid(row=7,column=0,sticky=E)
-		self.vanilla_playercountEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_playercountIntVar)
-		self.vanilla_playercountEntry.grid(row=7,column=1,sticky=W)
-		self.vanilla_playercount_tip = CTkToolTip(self.vanilla_playercountLabel,"server.properties setting: 'max-players'")
-		self.vanilla_resourcePackPromptLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Resource Pack Prompt: ")
-		self.vanilla_resourcePackPromptLabel.grid(row=8,column=0,sticky=E)
-		self.vanilla_resourcePackPromptStringVar = StringVar(value=MinecraftServerProperties.get('resource-pack-prompt'))
-		self.vanilla_resourcePackPromptEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_resourcePackPromptStringVar)
-		self.vanilla_resourcePackPromptEntry.grid(row=8,column=1,sticky=W)
-		self.vanilla_resourcePackPromptLabel_tip = CTkToolTip(self.vanilla_resourcePackPromptLabel,"server.properties setting: 'resource-pack-prompt'")
-		self.vanilla_generatorsettingsvar = StringVar(value=MinecraftServerProperties.get('generator-settings'))
-		self.vanilla_generatorSettingsLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Generator Settings: ")
-		self.vanilla_generatorSettingsLabel.grid(row=9,column=0,sticky=E)
-		self.vanilla_generatorSettingsEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_generatorsettingsvar)
-		self.vanilla_generatorSettingsEntry.grid(row=9,column=1,sticky=W)
-		self.vanilla_generatorsettings_tip = CTkToolTip(self.vanilla_generatorSettingsLabel,"server.properties setting: 'generator-settings'")
-		self.vanilla_viewDistanceIntVar = IntVar(value=MinecraftServerProperties.get('view-distance'))
-		self.vanilla_viewDistanceLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="View Distance: ")
-		self.vanilla_viewDistanceLabel.grid(row=10,column=0,sticky=E)
-		self.vanilla_viewDistanceEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_viewDistanceIntVar)
-		self.vanilla_viewDistanceEntry.grid(row=10,column=1,sticky=W)
-		self.vanilla_viewDistance_tip = CTkToolTip(self.vanilla_viewDistanceLabel,"server.properties settings: 'view-distance'")
-		self.vanilla_simulationDistanceIntVar = IntVar(value=MinecraftServerProperties.get('simulation-distance'))
-		self.vanilla_simulationDistanceLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Simulation Distance: ")
-		self.vanilla_simulationDistanceLabel.grid(row=11,column=0,sticky=E)
-		self.vanilla_simulationDistanceEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_simulationDistanceIntVar)
-		self.vanilla_simulationDistanceEntry.grid(row=11,column=1,sticky=W)
-		self.vanilla_simulationDistance_tip = CTkToolTip(self.vanilla_simulationDistanceLabel,"server.properties setting: 'simulation-distance'")
-		self.vanilla_neighborupdatesIntVar = IntVar(value=MinecraftServerProperties.get('max-chained-neighbor-updates'))
-		self.vanilla_neighborupdatesLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Max Chained Updates: ")
-		self.vanilla_neighborupdatesLabel.grid(row=12,column=0,sticky=E)
-		self.vanilla_neighborupdatesEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_neighborupdatesIntVar)
-		self.vanilla_neighborupdatesEntry.grid(row=12,column=1,sticky=W)
-		self.vanilla_neighborupdates_tip = CTkToolTip(self.vanilla_neighborupdatesLabel,"server.properties setting: 'max-chained-neighbor-updates'")
-		self.vanilla_disableddataPackStringVar = StringVar(value=MinecraftServerProperties.get('initial-disabled-packs'))
-		self.vanilla_disableddataPackLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Disabled Datapacks: ")
-		self.vanilla_disableddataPackLabel.grid(row=13,column=0,sticky=E)
-		self.vanilla_disableddataPackEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_disableddataPackStringVar)
-		self.vanilla_disableddataPackEntry.grid(row=13,column=1,sticky=W)
-		self.vanilla_enableddatapacksStringVar = StringVar(value=MinecraftServerProperties.get('initial-enabled-packs'))
-		self.vanilla_enableddatapacksLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Enabled Datapacks: ")
-		self.vanilla_enableddatapacksLabel.grid(row=14,column=0,sticky=E)
-		self.vanilla_enableddatapacksEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_enableddatapacksStringVar)
-		self.vanilla_enableddatapacksEntry.grid(row=14,column=1,sticky=W)
-		self.vanilla_resourcePackConfigurationBtn = CTkButton(self.vanilla_WorldSettingsFrame,text="Configure Resource Pack",command=MCSC_Framework.onMainWindow_openResourcePackConfig)
-		self.vanilla_resourcePackConfigurationBtn.grid(row=15,column=0,sticky=W,pady=3)
-		self.vanilla_MOTDConfigBtn = CTkButton(self.vanilla_WorldSettingsFrame,text="Configure MOTD",command=MCSC_Framework.onMainWindow_openMOTDConfig)
-		self.vanilla_MOTDConfigBtn.grid(row=15,column=1,sticky=W,pady=3)
-		#World Settings booleans
-		self.vanilla_WorldSettingsBools = CTkFrame(self.vanilla_WorldSettingsFrame)
-		self.vanilla_WorldSettingsBools.grid(row=16,column=0,columnspan=2)
-		self.vanilla_usecmdBlocksBoolVar = BooleanVar(value=MinecraftServerProperties.get("enable-command-block"))
-		self.vanilla_commandBlockUsage = CTkCheckBox(self.vanilla_WorldSettingsBools,onvalue=True,offvalue=False,text="Allow Command Blocks",variable=self.vanilla_usecmdBlocksBoolVar)
-		self.vanilla_commandBlockUsage.grid(row=0,column=0,sticky=W,padx=3)
-		self.vanilla_cmdBlock_tip = CTkToolTip(self.vanilla_commandBlockUsage,"server.properties setting: 'enable-command-block'")
-		self.vanilla_isPVPBool = BooleanVar(value=MinecraftServerProperties.get('pvp'))
-		self.vanilla_isPVP = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Allow PVP",variable=self.vanilla_isPVPBool,onvalue=True,offvalue=False)
-		self.vanilla_isPVP.grid(row=0,column=1,padx=3)
-		self.vanilla_pvp_tip = CTkToolTip(self.vanilla_isPVP,"server.properties setting: 'pvp'")
-		self.vanilla_strictGamemodeBool = BooleanVar(value=MinecraftServerProperties.get('force-gamemode'))
-		self.vanilla_strictGamemode = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Enforce Gamemode",variable=self.vanilla_strictGamemodeBool,onvalue=True,offvalue=False)
-		self.vanilla_strictGamemode.grid(row=1,column=0,padx=3,pady=3,sticky=W)
-		self.vanilla_strictGamemode_tip = CTkToolTip(self.vanilla_strictGamemode,"server.properties setting: 'force-gamemode'")
-		self.vanilla_resourcePackRequirementBool = BooleanVar(value=MinecraftServerProperties.get('require-resource-pack'))
-		self.vanilla_resourcePackRequirement = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Requires Resource Pack",variable=self.vanilla_resourcePackRequirementBool,onvalue=True,offvalue=False)
-		self.vanilla_resourcePackRequirement.grid(row=2,column=0,padx=3,sticky=NW)
-		self.vanilla_resourcePackRequirement_tip = CTkToolTip(self.vanilla_resourcePackRequirement,"server.properties setting: 'require-resource-pack'")
-		self.vanilla_netherDimension = BooleanVar(value=MinecraftServerProperties.get('allow-nether'))
-		self.vanilla_netherTravel = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Allow Nether",variable=self.vanilla_netherDimension,onvalue=True,offvalue=False)
-		self.vanilla_netherTravel.grid(row=1,column=1)
-		self.vanilla_canFly = BooleanVar(value=MinecraftServerProperties.get('allow-flight'))
-		self.vanilla_hasFlight = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Allow Flying",variable=self.vanilla_canFly,onvalue=True,offvalue=False)
-		self.vanilla_hasFlight.grid(row=2,column=1,padx=3,pady=3)
-		self.vanilla_flying_tip = CTkToolTip(self.vanilla_hasFlight, "server.properties setting: 'allow-flight'")
-		self.vanilla_netherTravel_tip = CTkToolTip(self.vanilla_netherTravel,"server.properties setting:'allow-nether'")
-		self.vanilla_isHardcoreWorldBool = BooleanVar(value=MinecraftServerProperties.get("hardcore"))
-		self.vanilla_isHardcore = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Hardcore World",variable=self.vanilla_isHardcoreWorldBool,onvalue=True,offvalue=False)
-		self.vanilla_isHardcore.grid(row=3,column=0,sticky=NW,padx=3)
-		self.vanilla_hardcore_tip = CTkToolTip(self.vanilla_isHardcore,"server.properties setting:'hardcore'")
-		self.vanilla_onlinePlayersHiddenBool = BooleanVar(value=MinecraftServerProperties.get('hide-online-players'))
-		self.vanilla_showOnlinePlayers = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Hide Online Players",variable=self.vanilla_onlinePlayersHiddenBool,onvalue=True,offvalue=False)
-		self.vanilla_showOnlinePlayers.grid(row=3,column=1,padx=3,sticky=W)
-		self.vanilla_visibeOnlinePlayers = CTkToolTip(self.vanilla_showOnlinePlayers,"server.properties setting: 'hide-online-players'")
-		self.vanilla_statusBool = BooleanVar(value=MinecraftServerProperties.get('enable-status'))
-		self.vanilla_toggleStatus = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Toggle Status",variable=self.vanilla_statusBool,onvalue=True,offvalue=False)
-		self.vanilla_toggleStatus.grid(row=4,column=0,padx=3,pady=3,sticky=W)
-		self.vanilla_strictProfileBool = BooleanVar(value=MinecraftServerProperties.get('enforce-secure-profile'))
-		self.vanilla_strictProfile = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Stricted Profiling",variable=self.vanilla_strictProfileBool,onvalue=True,offvalue=False)
-		self.vanilla_strictProfile.grid(row=5,column=0,sticky=W,padx=3)
-		self.vanilla_strictProfile_tip = CTkToolTip(self.vanilla_strictProfile,"server.properties setting: 'enforce-secure-profile'")
-		self.vanilla_nativeTransport = BooleanVar(value=MinecraftServerProperties.get('use-native-transport'))
-		self.vanilla_useNativeTransport = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Native Transport",variable=self.vanilla_nativeTransport,onvalue=True,offvalue=False)
-		self.vanilla_useNativeTransport.grid(row=6,column=0,sticky=W,padx=3,pady=3)
-		self.vanilla_nativeTransport_tip = CTkToolTip(self.vanilla_useNativeTransport,"server.properties setting: 'use-native-transport'")
-		self.vanilla_structureGeneration = BooleanVar(value=MinecraftServerProperties.get('generate-structures'))
-		self.vanilla_structureWillGenerate = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Structure Generation",variable=self.vanilla_structureGeneration,onvalue=True,offvalue=False)
-		self.vanilla_structureWillGenerate.grid(row=4,column=1,sticky=W,padx=3)
-		self.vanilla_structure_tip = CTkToolTip(self.vanilla_structureWillGenerate,"server.properties setting:'generate-structures'")
-		self.vanilla_npcSpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-npcs'))
-		self.vanilla_NPCspawning = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Spawn NPCs",variable=self.vanilla_npcSpawning,onvalue=True,offvalue=False)
-		self.vanilla_NPCspawning.grid(row=5,column=1,sticky=W,padx=3)
-		self.vanilla_npcSpawning_tip = CTkToolTip(self.vanilla_NPCspawning,"server.properties setting: 'spawn-npcs'")
-		self.vanilla_animalSpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-animals'))
-		self.vanilla_Animalspawning = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Spawn Animals",variable=self.vanilla_animalSpawning,onvalue=True,offvalue=False)
-		self.vanilla_Animalspawning.grid(row=6,column=1,sticky=W,padx=3)
-		self.vanilla_animalspawning_tip = CTkToolTip(self.vanilla_Animalspawning,"server.properties setting: 'spawn-animals'")
-		self.vanilla_enemySpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-monsters'))
-		self.vanilla_Enemyspawning = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Spawn Enemies",variable=self.vanilla_enemySpawning,onvalue=True,offvalue=False)
-		self.vanilla_Enemyspawning.grid(row=7,column=1,sticky=W,padx=3)
-		self.vanilla_enemyspawning_tip = CTkToolTip(self.vanilla_Enemyspawning,"server.properties setting: 'spawn-monsters'")
-		self.vanilla_broadcastConsoleBool = BooleanVar(value=MinecraftServerProperties.get('broadcast-console-to-ops'))
-		self.vanilla_broadcastConsole = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Broadcast System Console",variable=self.vanilla_broadcastConsoleBool,onvalue=True,offvalue=False)
-		self.vanilla_broadcastConsole.grid(row=7,column=0,sticky=W,padx=3)
-		self.vanilla_broadcastconsole_tip = CTkToolTip(self.vanilla_broadcastConsole,"server.properties setting: 'broadcast-console-to-ops'")
-		#Network & Security Tab
-		self.vanilla_NetworkSecurityTab = CTkScrollableFrame(self.vanillaserverPropertiesFrame_tabs.tab("Network & Security"))
-		self.vanilla_NetworkSecurityTab.pack(fill=BOTH,expand=True,anchor=W)
-		self.vanilla_MinecraftServerIPStringVar = StringVar(value=MinecraftServerProperties.get('server-ip'))
-		self.vanilla_IPAddressLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Server IP: ")
-		self.vanilla_IPAddressLabel.grid(row=0,column=0,sticky=E)
-		self.vanilla_IPAddressEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_MinecraftServerIPStringVar)
-		self.vanilla_IPAddressEntry.grid(row=0,column=1,sticky=W)
-		self.vanilla_IPAddress_tip = CTkToolTip(self.vanilla_IPAddressLabel,"server.properties setting: 'server-ip'")
-		self.vanilla_NetworkCompressionIntVar = IntVar(value=MinecraftServerProperties.get('network-compression-threshold'))
-		self.vanilla_networkcompressionLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Network Compression: ")
-		self.vanilla_networkcompressionLabel.grid(row=1,column=0,sticky=E)
-		self.vanilla_networkCompressionEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_NetworkCompressionIntVar)
-		self.vanilla_networkCompressionEntry.grid(row=1,column=1,sticky=W)
-		self.vanilla_networkCompression_tip = CTkToolTip(self.vanilla_networkcompressionLabel,"server.properties setting: 'network-compression-threshold'")
-		self.vanilla_ticktimeIntVar = IntVar(value=MinecraftServerProperties.get('max-tick-time'))
-		self.vanilla_ticktimeLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Max Tick Rate: ")
-		self.vanilla_ticktimeLabel.grid(row=2,column=0,sticky=E)
-		self.vanilla_ticktimeEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_ticktimeIntVar)
-		self.vanilla_ticktimeEntry.grid(row=2,column=1,sticky=W)
-		self.vanilla_ticktime_tip = CTkToolTip(self.vanilla_ticktimeLabel,"server.properties setting: 'max-tick-time'")
-		self.vanilla_maxplayersIntVar = IntVar(value=MinecraftServerProperties.get('max-players'))
-		self.vanilla_maxplayersLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Max Players: ")
-		self.vanilla_maxplayersLabel.grid(row=3,column=0,sticky=E)
-		self.vanilla_maxplayersEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_maxplayersIntVar)
-		self.vanilla_maxplayersEntry.grid(row=3,column=1,sticky=W)
-		self.vanilla_maxplayers_tip = CTkToolTip(self.vanilla_maxplayersLabel,"server.properties setting: 'max-players'")
-		self.vanilla_serverportIntVar = IntVar(value=MinecraftServerProperties.get('server-port'))
-		self.vanilla_serverportLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Server Port: ")
-		self.vanilla_serverportLabel.grid(row=4,column=0,sticky=E)
-		self.vanilla_serverportEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_serverportIntVar)
-		self.vanilla_serverportEntry.grid(row=4,column=1,sticky=W)
-		self.vanilla_serverport_tip = CTkToolTip(self.vanilla_serverportLabel,"server.properties setting: 'server-port'")
-		self.vanilla_opPermissionlvlList = ["0","1","2","3","4"]
-		self.vanilla_opPermissionlvlIntVar = IntVar(value=MinecraftServerProperties.get('op-permission-level'))
-		self.vanilla_opPermissionlvlLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Op Permission Level: ")
-		self.vanilla_opPermissionlvlLabel.grid(row=5,column=0,sticky=E)
-		self.vanilla_opPermissionlvlComboBox = CTkComboBox(self.vanilla_NetworkSecurityTab,values=self.vanilla_opPermissionlvlList,variable=self.vanilla_opPermissionlvlIntVar)
-		self.vanilla_opPermissionlvlComboBox.grid(row=5,column=1,sticky=W)
-		self.vanilla_opPermissionlvl_tip = CTkToolTip(self.vanilla_opPermissionlvlLabel,"server.properties setting: 'op-permission-level'")
-		self.vanilla_entitybroadcastRangeList = [str(i) for i in range(10,1000)] #Best way of generating numbers from its set range
-		self.vanilla_entitybroadcastRangeIntVar = IntVar(value=MinecraftServerProperties.get('entity-broadcast-range-percentage'))
-		self.vanilla_entitybroadcastRangeLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Entity Broadcasting: ")
-		self.vanilla_entitybroadcastRangeLabel.grid(row=6,column=0,sticky=E)
-		self.vanilla_entitybroadcastRangeCombobox = CTkComboBox(self.vanilla_NetworkSecurityTab,values=self.vanilla_entitybroadcastRangeList,variable=self.vanilla_entitybroadcastRangeIntVar)
-		self.vanilla_entitybroadcastRangeCombobox.grid(row=6,column=1,sticky=W)
-		self.vanilla_entitybroadcastRange_tip = CTkToolTip(self.vanilla_entitybroadcastRangeLabel,"server.properties setting: 'entity-broadcast-range-percentage")
-		self.vanilla_playertimeoutIntVar = IntVar(value=MinecraftServerProperties.get('player-idle-timeout'))
-		self.vanilla_playertimeoutLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Idle Player Timeout: ")
-		self.vanilla_playertimeoutLabel.grid(row=7,column=0,sticky=E)
-		self.vanilla_playertimeoutEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_playercountIntVar)
-		self.vanilla_playertimeoutEntry.grid(row=7,column=1,sticky=W)
-		self.vanilla_playertimeout_tip = CTkToolTip(self.vanilla_playertimeoutLabel,"server.properties setting: 'player-idle-timeout'")
-		self.vanilla_ratelimitIntvar = IntVar(value=MinecraftServerProperties.get('rate-limit'))
-		self.vanilla_ratelimitLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Rate Limit: ")
-		self.vanilla_ratelimitLabel.grid(row=8,column=0,sticky=E)
-		self.vanilla_ratelimitEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_ratelimitIntvar)
-		self.vanilla_ratelimitEntry.grid(row=8,column=1,sticky=W)
-		self.vanilla_ratelimit_tip = CTkToolTip(self.vanilla_ratelimitLabel,"server.properties setting: 'rate-limit'")
-		self.vanilla_functionPermissionlvlList = [str(x) for x in range(1,4)]
-		self.vanilla_functionPermissionlvlIntvar = IntVar(value=MinecraftServerProperties.get('function-permission-level'))
-		self.vanilla_functionPermissionlvlLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Fuction Permission Level: ")
-		self.vanilla_functionPermissionlvlLabel.grid(row=9,column=0,sticky=E)
-		self.vanilla_functionPermissionlvlComboBox = CTkComboBox(self.vanilla_NetworkSecurityTab,values=self.vanilla_functionPermissionlvlList,variable=self.vanilla_functionPermissionlvlIntvar)
-		self.vanilla_functionPermissionlvlComboBox.grid(row=9,column=1,sticky=W)
-		self.vanilla_functionPermissionlvl_tip = CTkToolTip(self.vanilla_functionPermissionlvlLabel,"server.properties setting: 'function-permission-level'")
-		self.vanilla_rconPasswordStringVar = StringVar(value=MinecraftServerProperties.get('rcon.password'))
-		self.vanilla_rconPasswordLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="RCON Password: ")
-		self.vanilla_rconPasswordLabel.grid(row=10,column=0,sticky=E)
-		self.vanilla_rconPasswordEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_rconPasswordStringVar)
-		self.vanilla_rconPasswordEntry.grid(row=10,column=1,sticky=W)
-		self.vanilla_rconPassword_tip = CTkToolTip(self.vanilla_rconPasswordLabel,"server.properties setting: 'rcon.password'")
-		self.vanilla_rconportIntVar = IntVar(value=MinecraftServerProperties.get('rcon.port'))
-		self.vanilla_rconportLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="RCON Port: ")
-		self.vanilla_rconportLabel.grid(row=11,column=0,sticky=E)
-		self.vanilla_rconportEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_rconportIntVar)
-		self.vanilla_rconportEntry.grid(row=11,column=1,sticky=W)
-		self.vanilla_rconport_tip = CTkToolTip(self.vanilla_rconportLabel,"server.properties setting: 'rcon.port'")
-		self.vanilla_queryportIntVar = IntVar(value=MinecraftServerProperties.get('query.port'))
-		self.vanilla_queryportLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Query Port: ")
-		self.vanilla_queryportLabel.grid(row=12,column=0,sticky=E)
-		self.vanilla_queryportEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_queryportIntVar)
-		self.vanilla_queryportEntry.grid(row=12,column=1,sticky=W)
-		self.vanilla_queryport_tip = CTkToolTip(self.vanilla_queryportLabel,"server.properties setting: 'query.port'")
-		self.vanilla_bugreportingStringVar = StringVar(value=MinecraftServerProperties.get('bug-report-link'))
-		self.vanilla_bugreportingLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Bug Report Link: ")
-		self.vanilla_bugreportingLabel.grid(row=13,column=0,sticky=E)
-		self.vanilla_bugreportingEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_bugreportingStringVar)
-		self.vanilla_bugreportingEntry.grid(row=13,column=1,sticky=W)
-		self.vanilla_bugreporting_tip = CTkToolTip(self.vanilla_bugreportingLabel,"server.properties setting: 'bug-report-link'")
-		#Networking Tab Bools
-		self.vanilla_NetworkSecurityTabBools = CTkFrame(self.vanilla_NetworkSecurityTab)
-		self.vanilla_NetworkSecurityTabBools.grid(row=13,column=0,columnspan=2,sticky=E)
-		self.vanilla_togglequery = BooleanVar(value=MinecraftServerProperties.get('enable-query'))
-		self.vanilla_canQueryCheck = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Enable Query",variable=self.vanilla_togglequery,onvalue=True,offvalue=False)
-		self.vanilla_canQueryCheck.grid(row=0,column=1,padx=3,pady=3,sticky=W)
-		self.vanilla_canquery_tip = CTkToolTip(self.vanilla_canQueryCheck,"server.properties setting: 'enable-query'")
-		self.vanilla_chunkwriteSyncingBool = BooleanVar(value=MinecraftServerProperties.get('sync-chunk-writes'))
-		self.vanilla_chunkwriteSyncingCheck = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Synchronized Chunk Writing",variable=self.vanilla_chunkwriteSyncingBool,onvalue=True,offvalue=False)
-		self.vanilla_chunkwriteSyncingCheck.grid(row=1,column=0,padx=3,pady=3,sticky=W)
-		self.vanilla_chunkwriteSyncing_tip = CTkToolTip(self.vanilla_chunkwriteSyncingCheck,"server.properties setting: 'sync-chunk-writes'")
-		self.vanilla_proxyBlockingBool = BooleanVar(value=MinecraftServerProperties.get('prevent-proxy-connections'))
-		self.vanilla_proxyBlockingCheck = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Block Proxy Connections",variable=self.vanilla_proxyBlockingBool,onvalue=True,offvalue=False)
-		self.vanilla_proxyBlockingCheck.grid(row=0,column=0,padx=3,pady=3,sticky=W)
-		self.vanilla_proxyblocking_tip = CTkToolTip(self.vanilla_proxyBlockingCheck,"server.properties setting: 'prevent-proxy-connections'")
-		self.vanilla_toggleOnlineMode = BooleanVar(value=MinecraftServerProperties.get('online-mode'))
-		self.vanilla_isOnline = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Online Mode",variable=self.vanilla_toggleOnlineMode,onvalue=True,offvalue=False)
-		self.vanilla_isOnline.grid(row=1,column=1,sticky=W,padx=3,pady=3)
-		self.vanilla_isonline_tip = CTkToolTip(self.vanilla_isOnline,"server.properties setting: 'online-mode'")
-		self.vanilla_jmxMonitoringBool = BooleanVar(value=MinecraftServerProperties.get('enable-jmx-monitoring'))
-		self.vanilla_jmxMonitoringCheck = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Toggle JMX Monitoring",variable=self.vanilla_jmxMonitoringBool,onvalue=True,offvalue=False)
-		self.vanilla_jmxMonitoringCheck.grid(row=2,column=0,sticky=W,pady=3,padx=3)
-		self.vanilla_jmxMonitoring_tip = CTkToolTip(self.vanilla_jmxMonitoringCheck,"server.properties setting: 'enable-jmx-monitoring'")
-		self.vanilla_isIPLogging = BooleanVar(value=MinecraftServerProperties.get('log-ips'))
-		self.vanilla_IPLogBool = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Log IPs",onvalue=True,offvalue=False,variable=self.vanilla_isIPLogging)
-		self.vanilla_IPLogBool.grid(row=2,column=1,padx=3,pady=3,sticky=W)
-		self.vanilla_togglerconBool = BooleanVar(value=MinecraftServerProperties.get('enable-rcon'))
-		self.vanilla_rconToggler = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Enable RCON",variable=self.vanilla_togglerconBool,onvalue=True,offvalue=False)
-		self.vanilla_rconToggler.grid(row=3,column=1,padx=3,pady=3,sticky=W)
-		self.vanilla_broadcastrconBool = BooleanVar(value=MinecraftServerProperties.get('broadcast-rcon-to-ops'))
-		self.vanilla_rconBroadcast = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Broadcast RCON",variable=self.vanilla_broadcastrconBool,onvalue=True,offvalue=False)
-		self.vanilla_rconBroadcast.grid(row=3,column=0,sticky=W,padx=3,pady=3)
-		self.vanilla_acceptTransfersBool = BooleanVar(value=MinecraftServerProperties.get('accept-transfers'))
-		self.vanilla_acceptTransfers = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Accept Transfers from Another Server",variable=self.vanilla_acceptTransfersBool,onvalue=True,offvalue=False)
-		self.vanilla_acceptTransfers.grid(row=4,column=0,padx=3,pady=3,sticky=W)
-		self.populateInstanceView(self.vanillainstanceView,"",self.instancesFolder,"Modpacks")
-		self.vanillainstanceView.bind("<<TreeviewSelect>>",self.displayInstanceDetails)
-		#Treeview
-		self.moddedinstancesViewFrame = CTkFrame(self.rootTabs.tab("Modded Server Instances"))
-		self.moddedinstancesViewFrame.grid(row=0,column=1,ipadx=10,ipady=10)
-		self.moddedinstanceView = ttk.Treeview(self.moddedinstancesViewFrame)
-		self.moddedinstanceView.grid(row=0,column=0,ipadx=100,ipady=200)
-		self.moddedinstanceSelectbtn = CTkButton(self.moddedinstancesViewFrame,text="Use Selected Instance",command=lambda:self.attachInstance(widget=self.moddedinstanceView))
-		self.moddedinstanceSelectbtn.grid(row=1,column=0,padx=3,pady=3)
-		self.moddedinstanceView.column("#0",width=200)
-		self.moddedinstanceView.heading("#0",text="Modded Instances")
-		#Modded Instances Details
-		self.moddedinstanceDetailsFrame = CTkFrame(self.rootTabs.tab("Modded Server Instances"))
-		self.moddedinstanceDetailsFrame.grid(row=0,column=0,ipadx=10,padx=10)
-		self.moddedinstanceImageData = CTkImage(dark_image=Image.open(str(rootFilepath) + "/base/ui/default.png"),size=(150,150))
-		self.moddedinstanceImage = CTkLabel(self.moddedinstanceDetailsFrame,text="",image=self.moddedinstanceImageData)
-		self.moddedinstanceImage.grid(row=0,column=0,sticky=EW,columnspan=2,pady=10)
-		self.moddedinstanceName = CTkLabel(self.moddedinstanceDetailsFrame,text="To Begin, Select or create a new modded instance")
-		self.moddedinstanceName.grid(row=1,column=0,columnspan=2)
-		self.moddedinstancetargetedDirectory = CTkLabel(self.moddedinstanceDetailsFrame,text=" ")
-		self.moddedinstancetargetedDirectory.grid(row=2,column=0)
-		self.moddedinstanceservertype = CTkLabel(self.moddedinstanceDetailsFrame,text=" ")
-		self.moddedinstanceservertype.grid(row=3,column=0)
-		self.moddedinstanceminecraftVersion = CTkLabel(self.moddedinstanceDetailsFrame,text=" ")
-		self.moddedinstanceminecraftVersion.grid(row=4,column=0)
-		self.moddedinstancemodloaderversion = CTkLabel(self.moddedinstanceDetailsFrame,text=" ")
-		self.moddedinstancemodloaderversion.grid(row=5,column=0)
-		self.moddedInstance_importModpackbtn = CTkButton(self.moddedinstanceDetailsFrame,text="Import Curseforge Modpack",command=self.onModpackLoad_LoadModpack)
-		self.moddedInstance_importModpackbtn.grid(row=6,column=0,pady=3,columnspan=2)
-		self.moddedInstance_importModpack_tooltip = CTkToolTip(self.moddedInstance_importModpackbtn, "NOTE: Do not use Server Pack. Minerva Server Crafter automatically .")
-		#Modded Instance creation area
-		self.creationTabsmodded = CTkTabview(self.moddedinstanceDetailsFrame)
-		self.creationTabsmodded.grid(row=7,column=0,columnspan=2)
-		self.creationTabsmodded.add("Create Instance")
-		self.creationTabsmodded.add("Instance Server Properties")
-		MCSC_Framework.onMainWindow_setTabState(self.creationTabsmodded,"Instance Server Properties","disabled")
-		self.create_moddedinstanceFrame = CTkFrame(self.creationTabsmodded.tab("Create Instance"))
-		self.create_moddedinstanceFrame.grid(row=5,column=0,padx=10,pady=10)
-		self.create_moddedinstance_instanceNameLabel = CTkLabel(self.create_moddedinstanceFrame,text="Instance Name: ")
-		self.create_moddedinstance_instanceNameLabel.grid(row=0,column=0,padx=10,pady=10)
-		self.create_moddedinstance_instanceNameEntry = CTkEntry(self.create_moddedinstanceFrame,placeholder_text="HINT: This is what your calling this instance")
-		self.create_moddedinstance_instanceNameEntry.grid(row=0,column=1,ipadx=100,columnspan=2)
-		self.create_moddedinstance_serverTypeLabel = CTkLabel(self.create_moddedinstanceFrame,text="Server Type: ")
-		self.create_moddedinstance_serverTypeLabel.grid(row=1,column=0,padx=10,pady=10)
-		self.create_moddedinstance_serverTypeCombo = CTkComboBox(self.create_moddedinstanceFrame,values=self.moddedservertypes,command=self.setMCVersions)
-		self.create_moddedinstance_serverTypeCombo.grid(row=1,column=1,ipadx=100,columnspan=2)
-		self.create_moddedinstance_minecraftVersionLabel = CTkLabel(self.create_moddedinstanceFrame,text="Minecraft Server Version: ")
-		self.create_moddedinstance_minecraftVersionLabel.grid(row=2,column=0,padx=10,pady=10)
-		self.create_moddedinstance_minecraftVersionStringVar = StringVar()
-		self.create_moddedinstance_minecraftVersionCombo = CTkComboBox(self.create_moddedinstanceFrame,values=[],variable=self.create_moddedinstance_minecraftVersionStringVar,command=self.setServerTypeVersions)
-		self.create_moddedinstance_minecraftVersionCombo.grid(row=2,column=1,ipadx=100,columnspan=2)
-		self.create_moddedinstance_serverTypeVersionLabel = CTkLabel(self.create_moddedinstanceFrame,text="Server Type Version: ")
-		self.create_moddedinstance_serverTypeVersionLabel.grid(row=3,column=0,padx=10,pady=10)
-		self.create_moddedinstance_serverTypeVersionStringVar = StringVar()
-		self.create_moddedinstance_serverTypeVersionCombo = CTkComboBox(self.create_moddedinstanceFrame,values=[],variable=self.create_moddedinstance_serverTypeVersionStringVar)
-		self.create_moddedinstance_serverTypeVersionCombo.grid(row=3,column=1,columnspan=2,ipadx=100)
-		self.create_moddedinstance_serverDirectoryLabel = CTkLabel(self.create_moddedinstanceFrame,text="Server Directory: ")
-		self.create_moddedinstance_serverDirectoryLabel.grid(row=4,column=0,padx=10,pady=10)
-		self.create_moddedinstance_serverDirectoryLabel_directory = CTkLabel(self.create_moddedinstanceFrame,text=" ")
-		self.create_moddedinstance_serverDirectoryLabel_directory.grid(row=4,column=1)
-		self.create_moddedinstance_browseForServerDirectoryBtn = CTkButton(self.create_moddedinstanceFrame,text="Browse")
-		self.create_moddedinstance_browseForServerDirectoryBtn.grid(row=4,column=2,padx=1)
-		self.create_moddedinstance_generateInstanceBtn = CTkButton(self.create_moddedinstanceFrame,text="Generate Instance",command=self.buttonActionModded_onClickSubmit)
-		self.create_moddedinstance_generateInstanceBtn.grid(row=5,column=0)
-		self.create_moddedinstance_enforceserverDirectory = CTkCheckBox(self.create_moddedinstanceFrame,text="Strict Server Directory",onvalue=True,offvalue=False)
-		self.create_moddedinstance_enforceserverDirectory.grid(row=5,column=1)
-		#Modded Instance Server Properties tab
-		self.moddedserverPropertiesFrame = CTkFrame(self.creationTabsmodded.tab("Instance Server Properties"))
-		self.moddedserverPropertiesFrame.pack(fill=BOTH,expand=True,anchor=W,ipadx=100)
-		self.moddedserverPropertiesFrame_tabs = CTkTabview(self.moddedserverPropertiesFrame)
-		self.moddedserverPropertiesFrame_tabs.pack(fill=BOTH,expand=True,side=RIGHT,)
-		self.moddedserverPropertiesFrame_tabs.add("World Settings")
-		self.moddedserverPropertiesFrame_tabs.add("Network & Security")
-		#Action Panel
-		self.moddedActionPanel = CTkFrame(self.moddedserverPropertiesFrame)
-		self.moddedActionPanel.pack(fill=Y,expand=True,side=LEFT)
-		#Server Type Image
-		self.moddedServerTypeImage = CTkLabel(self.moddedActionPanel, text="\n\n\n\nSettings Panel\n")
-		self.moddedServerTypeImage.grid(row=0,column=0,pady=10)
-		self.moddedImportPropertiesFileBtn = CTkButton(self.moddedActionPanel,text="Import Settings from File",command=ServerFileIO.importPropertiesfromFile)
-		self.moddedImportPropertiesFileBtn.grid(row=1,column=0)
-		self.moddedImportPropertiesFile_tip = CTkToolTip(self.moddedImportPropertiesFileBtn,"Imports server.properties Settings to JSON Model")
-		self.moddedSavetoJSONFile = CTkButton(self.moddedActionPanel,text="Apply Settings to JSON",command=lambda: self.exportToJSONModel(instanceName=str(ServerFileIO.getLastConfig()),useVersion=str(ServerFileIO.getVersionInfoFromLastConfig())))
-		self.moddedSavetoJSONFile.grid(row=2,column=0)
-		self.moddedSavetoJSONFile_tip = CTkToolTip(self.moddedSavetoJSONFile,"Saves the JSON Model to properties.json")
-		self.moddedConvertJSONData = CTkButton(self.moddedActionPanel,text="Convert Settings to File",command=lambda:ServerFileIO.convertJSONPropertiestoPropertiesFile(rootFilepath))
-		self.moddedConvertJSONData.grid(row=3,column=0)
-		self.moddedConvertJSONData_tip = CTkToolTip(self.moddedConvertJSONData,"Converts properties.json to server.properties, and saves it into the server directory")
-		#World Settings Tab
-		self.modded_WorldSettingsFrame = CTkScrollableFrame(self.moddedserverPropertiesFrame_tabs.tab("World Settings"))
-		self.modded_WorldSettingsFrame.pack(fill=BOTH,expand=True,anchor=W)
-		self.modded_WorldNameLabel = CTkLabel(self.modded_WorldSettingsFrame,text="World Name: ")
-		self.modded_WorldNameLabel.grid(row=0,column=0,sticky=E)
-		self.modded_WorldNameStringVar = StringVar(value=MinecraftServerProperties.get("level-name"))
-		self.modded_WorldNameEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_WorldNameStringVar)
-		self.modded_WorldNameEntry.grid(row=0,column=1,sticky=W)
-		self.modded_WorldNameEntry_tip = CTkToolTip(self.modded_WorldNameLabel,"server.properties setting: 'level-name'")
-		self.modded_levelSeedLabel = CTkLabel(self.modded_WorldSettingsFrame,text="World Seed: ")
-		self.modded_levelSeedLabel.grid(row=1,column=0,sticky=E)
-		self.modded_levelSeedStringVar = StringVar(value=MinecraftServerProperties.get("level-seed"))
-		self.modded_levelSeedEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_levelSeedStringVar)
-		self.modded_levelSeedEntry.grid(row=1,column=1,sticky=W)
-		self.modded_levelSeedEntry_tip = CTkToolTip(self.modded_levelSeedLabel,"server.properties setting: 'level-seed'")
-		self.modded_gamemodeList = ["survival","creative","adventure","spectator"]
-		self.modded_gamemodeStringVar = StringVar(value=MinecraftServerProperties.get("gamemode"))
-		self.modded_gamemodeListLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Gamemode: ")
-		self.modded_gamemodeListLabel.grid(row=2,column=0,sticky=E)
-		self.modded_gamemodeListComboBox = CTkComboBox(self.modded_WorldSettingsFrame,values=self.modded_gamemodeList,variable=self.modded_gamemodeStringVar)
-		self.modded_gamemodeListComboBox.grid(row=2,column=1,sticky=W)
-		self.modded_gamemodeList_tip = CTkToolTip(self.modded_gamemodeListLabel,"server.properties setting: 'gamemode'")
-		self.modded_spawnprotectionRadiusInt = IntVar(value=MinecraftServerProperties.get('spawn-protection'))
-		self.modded_spawnprotectionradiusLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Spawn Protection Radius: ")
-		self.modded_spawnprotectionradiusLabel.grid(row=3,column=0,sticky=E)
-		self.modded_spawnprotectionradiusEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_spawnprotectionRadiusInt)
-		self.modded_spawnprotectionradiusEntry.grid(row=3,column=1,sticky=W)
-		self.modded_spawnprotection_tip = CTkToolTip(self.modded_spawnprotectionradiusLabel,"server.properties setting: 'spawn-protection'")
-		self.modded_worldsizeInt = IntVar(value=MinecraftServerProperties.get('max-world-size'))
-		self.modded_worldsizeLabel = CTkLabel(self.modded_WorldSettingsFrame,text="World Size: ")
-		self.modded_worldsizeLabel.grid(row=4,column=0,sticky=E)
-		self.modded_worldsizeEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_worldsizeInt)
-		self.modded_worldsizeEntry.grid(row=4,column=1,sticky=W)
-		self.modded_worldsize_tip = CTkToolTip(self.modded_worldsizeLabel,"server.properties settings: 'max-world-size'")
-		self.modded_worldtypeLabel = CTkLabel(self.modded_WorldSettingsFrame,text="World Type: ")
-		self.modded_worldtypeLabel.grid(row=5,column=0,sticky=E)
-		self.modded_worldtypeOptions = ["default","minecraft:normal","minecraft:flat","minecraft:large_biomes","minecraft:amplified","minecraft:single_biome_surface"]
-		self.modded_worldtypeStringVar = StringVar(value=MinecraftServerProperties.get("level-type"))
-		self.modded_worldtypeComboBox = CTkComboBox(self.modded_WorldSettingsFrame,values=self.modded_worldtypeOptions,variable=self.modded_worldtypeStringVar)
-		self.modded_worldtypeComboBox.grid(row=5,column=1,sticky=W)
-		self.modded_worldtype_tip = CTkToolTip(self.modded_worldtypeLabel,"server.properties setting: 'level-type'")
-		self.modded_worldDifficultyVar = StringVar(value=MinecraftServerProperties.get('difficulty'))
-		self.modded_worldDifficultyList = ['peaceful','easy','normal','hard']
-		self.modded_worldDifficultyComboBox = CTkComboBox(self.modded_WorldSettingsFrame,values=self.modded_worldDifficultyList,variable=self.modded_worldDifficultyVar)
-		self.modded_worldDifficultyComboBox.grid(row=6,column=1,sticky=W)
-		self.modded_worldDifficultyLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Server Difficulty: ")
-		self.modded_worldDifficultyLabel.grid(row=6,column=0,sticky=E)
-		self.modded_worldDifficulty_tip = CTkToolTip(self.modded_worldDifficultyLabel,"server.properties setting: 'difficulty'")
-		self.modded_playercountIntVar = IntVar(value=MinecraftServerProperties.get('max-players'))
-		self.modded_playercountLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Player Count: ")
-		self.modded_playercountLabel.grid(row=7,column=0,sticky=E)
-		self.modded_playercountEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_playercountIntVar)
-		self.modded_playercountEntry.grid(row=7,column=1,sticky=W)
-		self.modded_playercount_tip = CTkToolTip(self.modded_playercountLabel,"server.properties setting: 'max-players'")
-		self.modded_resourcePackPromptLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Resource Pack Prompt: ")
-		self.modded_resourcePackPromptLabel.grid(row=8,column=0,sticky=E)
-		self.modded_resourcePackPromptStringVar = StringVar(value=MinecraftServerProperties.get('resource-pack-prompt'))
-		self.modded_resourcePackPromptEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_resourcePackPromptStringVar)
-		self.modded_resourcePackPromptEntry.grid(row=8,column=1,sticky=W)
-		self.modded_resourcePackPromptLabel_tip = CTkToolTip(self.modded_resourcePackPromptLabel,"server.properties setting: 'resource-pack-prompt'")
-		self.modded_generatorsettingsvar = StringVar(value=MinecraftServerProperties.get('generator-settings'))
-		self.modded_generatorSettingsLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Generator Settings: ")
-		self.modded_generatorSettingsLabel.grid(row=9,column=0,sticky=E)
-		self.modded_generatorSettingsEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_generatorsettingsvar)
-		self.modded_generatorSettingsEntry.grid(row=9,column=1,sticky=W)
-		self.modded_generatorsettings_tip = CTkToolTip(self.modded_generatorSettingsLabel,"server.properties setting: 'generator-settings'")
-		self.modded_viewDistanceIntVar = IntVar(value=MinecraftServerProperties.get('view-distance'))
-		self.modded_viewDistanceLabel = CTkLabel(self.modded_WorldSettingsFrame,text="View Distance: ")
-		self.modded_viewDistanceLabel.grid(row=10,column=0,sticky=E)
-		self.modded_viewDistanceEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_viewDistanceIntVar)
-		self.modded_viewDistanceEntry.grid(row=10,column=1,sticky=W)
-		self.modded_viewDistance_tip = CTkToolTip(self.modded_viewDistanceLabel,"server.properties settings: 'view-distance'")
-		self.modded_simulationDistanceIntVar = IntVar(value=MinecraftServerProperties.get('simulation-distance'))
-		self.modded_simulationDistanceLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Simulation Distance: ")
-		self.modded_simulationDistanceLabel.grid(row=11,column=0,sticky=E)
-		self.modded_simulationDistanceEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_simulationDistanceIntVar)
-		self.modded_simulationDistanceEntry.grid(row=11,column=1,sticky=W)
-		self.modded_simulationDistance_tip = CTkToolTip(self.modded_simulationDistanceLabel,"server.properties setting: 'simulation-distance'")
-		self.modded_neighborupdatesIntVar = IntVar(value=MinecraftServerProperties.get('max-chained-neighbor-updates'))
-		self.modded_neighborupdatesLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Max Chained Updates: ")
-		self.modded_neighborupdatesLabel.grid(row=12,column=0,sticky=E)
-		self.modded_neighborupdatesEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_neighborupdatesIntVar)
-		self.modded_neighborupdatesEntry.grid(row=12,column=1,sticky=W)
-		self.modded_neighborupdates_tip = CTkToolTip(self.modded_neighborupdatesLabel,"server.properties setting: 'max-chained-neighbor-updates'")
-		self.modded_disableddataPackStringVar = StringVar(value=MinecraftServerProperties.get('initial-disabled-packs'))
-		self.modded_disableddataPackLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Disabled Datapacks: ")
-		self.modded_disableddataPackLabel.grid(row=13,column=0,sticky=E)
-		self.modded_disableddataPackEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_disableddataPackStringVar)
-		self.modded_disableddataPackEntry.grid(row=13,column=1,sticky=W)
-		self.modded_enableddatapacksStringVar = StringVar(value=MinecraftServerProperties.get('initial-enabled-packs'))
-		self.modded_enableddatapacksLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Enabled Datapacks: ")
-		self.modded_enableddatapacksLabel.grid(row=14,column=0,sticky=E)
-		self.modded_enableddatapacksEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_enableddatapacksStringVar)
-		self.modded_enableddatapacksEntry.grid(row=14,column=1,sticky=W)
-		self.modded_resourcePackConfigurationBtn = CTkButton(self.modded_WorldSettingsFrame,text="Configure Resource Pack",command=MCSC_Framework.onMainWindow_openResourcePackConfig)
-		self.modded_resourcePackConfigurationBtn.grid(row=15,column=0,sticky=W,pady=3)
-		self.modded_MOTDConfigBtn = CTkButton(self.modded_WorldSettingsFrame,text="Configure MOTD",command=MCSC_Framework.onMainWindow_openMOTDConfig)
-		self.modded_MOTDConfigBtn.grid(row=15,column=1,sticky=W,pady=3)
-		#World Settings booleans
-		self.modded_WorldSettingsBools = CTkFrame(self.modded_WorldSettingsFrame)
-		self.modded_WorldSettingsBools.grid(row=16,column=0,columnspan=2)
-		self.modded_usecmdBlocksBoolVar = BooleanVar(value=MinecraftServerProperties.get("enable-command-block"))
-		self.modded_commandBlockUsage = CTkCheckBox(self.modded_WorldSettingsBools,onvalue=True,offvalue=False,text="Allow Command Blocks",variable=self.modded_usecmdBlocksBoolVar)
-		self.modded_commandBlockUsage.grid(row=0,column=0,sticky=W,padx=3)
-		self.modded_cmdBlock_tip = CTkToolTip(self.modded_commandBlockUsage,"server.properties setting: 'enable-command-block'")
-		self.modded_isPVPBool = BooleanVar(value=MinecraftServerProperties.get('pvp'))
-		self.modded_isPVP = CTkCheckBox(self.modded_WorldSettingsBools,text="Allow PVP",variable=self.modded_isPVPBool,onvalue=True,offvalue=False)
-		self.modded_isPVP.grid(row=0,column=1,padx=3)
-		self.modded_pvp_tip = CTkToolTip(self.modded_isPVP,"server.properties setting: 'pvp'")
-		self.modded_strictGamemodeBool = BooleanVar(value=MinecraftServerProperties.get('force-gamemode'))
-		self.modded_strictGamemode = CTkCheckBox(self.modded_WorldSettingsBools,text="Enforce Gamemode",variable=self.modded_strictGamemodeBool,onvalue=True,offvalue=False)
-		self.modded_strictGamemode.grid(row=1,column=0,padx=3,pady=3,sticky=W)
-		self.modded_strictGamemode_tip = CTkToolTip(self.modded_strictGamemode,"server.properties setting: 'force-gamemode'")
-		self.modded_resourcePackRequirementBool = BooleanVar(value=MinecraftServerProperties.get('require-resource-pack'))
-		self.modded_resourcePackRequirement = CTkCheckBox(self.modded_WorldSettingsBools,text="Requires Resource Pack",variable=self.modded_resourcePackRequirementBool,onvalue=True,offvalue=False)
-		self.modded_resourcePackRequirement.grid(row=2,column=0,padx=3,sticky=NW)
-		self.modded_resourcePackRequirement_tip = CTkToolTip(self.modded_resourcePackRequirement,"server.properties setting: 'require-resource-pack'")
-		self.modded_netherDimension = BooleanVar(value=MinecraftServerProperties.get('allow-nether'))
-		self.modded_netherTravel = CTkCheckBox(self.modded_WorldSettingsBools,text="Allow Nether",variable=self.modded_netherDimension,onvalue=True,offvalue=False)
-		self.modded_netherTravel.grid(row=1,column=1)
-		self.modded_canFly = BooleanVar(value=MinecraftServerProperties.get('allow-flight'))
-		self.modded_hasFlight = CTkCheckBox(self.modded_WorldSettingsBools,text="Allow Flying",variable=self.modded_canFly,onvalue=True,offvalue=False)
-		self.modded_hasFlight.grid(row=2,column=1,padx=3,pady=3)
-		self.modded_flying_tip = CTkToolTip(self.modded_hasFlight, "server.properties setting: 'allow-flight'")
-		self.modded_netherTravel_tip = CTkToolTip(self.modded_netherTravel,"server.properties setting:'allow-nether'")
-		self.modded_isHardcoreWorldBool = BooleanVar(value=MinecraftServerProperties.get("hardcore"))
-		self.modded_isHardcore = CTkCheckBox(self.modded_WorldSettingsBools,text="Hardcore World",variable=self.modded_isHardcoreWorldBool,onvalue=True,offvalue=False)
-		self.modded_isHardcore.grid(row=3,column=0,sticky=NW,padx=3)
-		self.modded_hardcore_tip = CTkToolTip(self.modded_isHardcore,"server.properties setting:'hardcore'")
-		self.modded_onlinePlayersHiddenBool = BooleanVar(value=MinecraftServerProperties.get('hide-online-players'))
-		self.modded_showOnlinePlayers = CTkCheckBox(self.modded_WorldSettingsBools,text="Hide Online Players",variable=self.modded_onlinePlayersHiddenBool,onvalue=True,offvalue=False)
-		self.modded_showOnlinePlayers.grid(row=3,column=1,padx=3,sticky=W)
-		self.modded_visibeOnlinePlayers = CTkToolTip(self.modded_showOnlinePlayers,"server.properties setting: 'hide-online-players'")
-		self.modded_statusBool = BooleanVar(value=MinecraftServerProperties.get('enable-status'))
-		self.modded_toggleStatus = CTkCheckBox(self.modded_WorldSettingsBools,text="Toggle Status",variable=self.modded_statusBool,onvalue=True,offvalue=False)
-		self.modded_toggleStatus.grid(row=4,column=0,padx=3,pady=3,sticky=W)
-		self.modded_strictProfileBool = BooleanVar(value=MinecraftServerProperties.get('enforce-secure-profile'))
-		self.modded_strictProfile = CTkCheckBox(self.modded_WorldSettingsBools,text="Stricted Profiling",variable=self.modded_strictProfileBool,onvalue=True,offvalue=False)
-		self.modded_strictProfile.grid(row=5,column=0,sticky=W,padx=3)
-		self.modded_strictProfile_tip = CTkToolTip(self.modded_strictProfile,"server.properties setting: 'enforce-secure-profile'")
-		self.modded_nativeTransport = BooleanVar(value=MinecraftServerProperties.get('use-native-transport'))
-		self.modded_useNativeTransport = CTkCheckBox(self.modded_WorldSettingsBools,text="Native Transport",variable=self.modded_nativeTransport,onvalue=True,offvalue=False)
-		self.modded_useNativeTransport.grid(row=6,column=0,sticky=W,padx=3,pady=3)
-		self.modded_nativeTransport_tip = CTkToolTip(self.modded_useNativeTransport,"server.properties setting: 'use-native-transport'")
-		self.modded_structureGeneration = BooleanVar(value=MinecraftServerProperties.get('generate-structures'))
-		self.modded_structureWillGenerate = CTkCheckBox(self.modded_WorldSettingsBools,text="Structure Generation",variable=self.modded_structureGeneration,onvalue=True,offvalue=False)
-		self.modded_structureWillGenerate.grid(row=4,column=1,sticky=W,padx=3)
-		self.modded_structure_tip = CTkToolTip(self.modded_structureWillGenerate,"server.properties setting:'generate-structures'")
-		self.modded_npcSpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-npcs'))
-		self.modded_NPCspawning = CTkCheckBox(self.modded_WorldSettingsBools,text="Spawn NPCs",variable=self.modded_npcSpawning,onvalue=True,offvalue=False)
-		self.modded_NPCspawning.grid(row=5,column=1,sticky=W,padx=3)
-		self.modded_npcSpawning_tip = CTkToolTip(self.modded_NPCspawning,"server.properties setting: 'spawn-npcs'")
-		self.modded_animalSpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-animals'))
-		self.modded_Animalspawning = CTkCheckBox(self.modded_WorldSettingsBools,text="Spawn Animals",variable=self.modded_animalSpawning,onvalue=True,offvalue=False)
-		self.modded_Animalspawning.grid(row=6,column=1,sticky=W,padx=3)
-		self.modded_animalspawning_tip = CTkToolTip(self.modded_Animalspawning,"server.properties setting: 'spawn-animals'")
-		self.modded_enemySpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-monsters'))
-		self.modded_Enemyspawning = CTkCheckBox(self.modded_WorldSettingsBools,text="Spawn Enemies",variable=self.modded_enemySpawning,onvalue=True,offvalue=False)
-		self.modded_Enemyspawning.grid(row=7,column=1,sticky=W,padx=3)
-		self.modded_enemyspawning_tip = CTkToolTip(self.modded_Enemyspawning,"server.properties setting: 'spawn-monsters'")
-		self.modded_broadcastConsoleBool = BooleanVar(value=MinecraftServerProperties.get('broadcast-console-to-ops'))
-		self.modded_broadcastConsole = CTkCheckBox(self.modded_WorldSettingsBools,text="Broadcast System Console",variable=self.modded_broadcastConsoleBool,onvalue=True,offvalue=False)
-		self.modded_broadcastConsole.grid(row=7,column=0,sticky=W,padx=3)
-		self.modded_broadcastconsole_tip = CTkToolTip(self.modded_broadcastConsole,"server.properties setting: 'broadcast-console-to-ops'")
-		#Network & Security Tab
-		self.modded_NetworkSecurityTab = CTkScrollableFrame(self.moddedserverPropertiesFrame_tabs.tab("Network & Security"))
-		self.modded_NetworkSecurityTab.pack(fill=BOTH,expand=True,anchor=W)
-		self.modded_MinecraftServerIPStringVar = StringVar(value=MinecraftServerProperties.get('server-ip'))
-		self.modded_IPAddressLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Server IP: ")
-		self.modded_IPAddressLabel.grid(row=0,column=0,sticky=E)
-		self.modded_IPAddressEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_MinecraftServerIPStringVar)
-		self.modded_IPAddressEntry.grid(row=0,column=1,sticky=W)
-		self.modded_IPAddress_tip = CTkToolTip(self.modded_IPAddressLabel,"server.properties setting: 'server-ip'")
-		self.modded_NetworkCompressionIntVar = IntVar(value=MinecraftServerProperties.get('network-compression-threshold'))
-		self.modded_networkcompressionLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Network Compression: ")
-		self.modded_networkcompressionLabel.grid(row=1,column=0,sticky=E)
-		self.modded_networkCompressionEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_NetworkCompressionIntVar)
-		self.modded_networkCompressionEntry.grid(row=1,column=1,sticky=W)
-		self.modded_networkCompression_tip = CTkToolTip(self.modded_networkcompressionLabel,"server.properties setting: 'network-compression-threshold'")
-		self.modded_ticktimeIntVar = IntVar(value=MinecraftServerProperties.get('max-tick-time'))
-		self.modded_ticktimeLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Max Tick Rate: ")
-		self.modded_ticktimeLabel.grid(row=2,column=0,sticky=E)
-		self.modded_ticktimeEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_ticktimeIntVar)
-		self.modded_ticktimeEntry.grid(row=2,column=1,sticky=W)
-		self.modded_ticktime_tip = CTkToolTip(self.modded_ticktimeLabel,"server.properties setting: 'max-tick-time'")
-		self.modded_maxplayersIntVar = IntVar(value=MinecraftServerProperties.get('max-players'))
-		self.modded_maxplayersLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Max Players: ")
-		self.modded_maxplayersLabel.grid(row=3,column=0,sticky=E)
-		self.modded_maxplayersEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_maxplayersIntVar)
-		self.modded_maxplayersEntry.grid(row=3,column=1,sticky=W)
-		self.modded_maxplayers_tip = CTkToolTip(self.modded_maxplayersLabel,"server.properties setting: 'max-players'")
-		self.modded_serverportIntVar = IntVar(value=MinecraftServerProperties.get('server-port'))
-		self.modded_serverportLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Server Port: ")
-		self.modded_serverportLabel.grid(row=4,column=0,sticky=E)
-		self.modded_serverportEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_serverportIntVar)
-		self.modded_serverportEntry.grid(row=4,column=1,sticky=W)
-		self.modded_serverport_tip = CTkToolTip(self.modded_serverportLabel,"server.properties setting: 'server-port'")
-		self.modded_opPermissionlvlList = ["0","1","2","3","4"]
-		self.modded_opPermissionlvlIntVar = IntVar(value=MinecraftServerProperties.get('op-permission-level'))
-		self.modded_opPermissionlvlLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Op Permission Level: ")
-		self.modded_opPermissionlvlLabel.grid(row=5,column=0,sticky=E)
-		self.modded_opPermissionlvlComboBox = CTkComboBox(self.modded_NetworkSecurityTab,values=self.modded_opPermissionlvlList,variable=self.modded_opPermissionlvlIntVar)
-		self.modded_opPermissionlvlComboBox.grid(row=5,column=1,sticky=W)
-		self.modded_opPermissionlvl_tip = CTkToolTip(self.modded_opPermissionlvlLabel,"server.properties setting: 'op-permission-level'")
-		self.modded_entitybroadcastRangeList = [str(i) for i in range(10,1000)] #Best way of generating numbers from its set range
-		self.modded_entitybroadcastRangeIntVar = IntVar(value=MinecraftServerProperties.get('entity-broadcast-range-percentage'))
-		self.modded_entitybroadcastRangeLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Entity Broadcasting: ")
-		self.modded_entitybroadcastRangeLabel.grid(row=6,column=0,sticky=E)
-		self.modded_entitybroadcastRangeCombobox = CTkComboBox(self.modded_NetworkSecurityTab,values=self.modded_entitybroadcastRangeList,variable=self.modded_entitybroadcastRangeIntVar)
-		self.modded_entitybroadcastRangeCombobox.grid(row=6,column=1,sticky=W)
-		self.modded_entitybroadcastRange_tip = CTkToolTip(self.modded_entitybroadcastRangeLabel,"server.properties setting: 'entity-broadcast-range-percentage")
-		self.modded_playertimeoutIntVar = IntVar(value=MinecraftServerProperties.get('player-idle-timeout'))
-		self.modded_playertimeoutLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Idle Player Timeout: ")
-		self.modded_playertimeoutLabel.grid(row=7,column=0,sticky=E)
-		self.modded_playertimeoutEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_playercountIntVar)
-		self.modded_playertimeoutEntry.grid(row=7,column=1,sticky=W)
-		self.modded_playertimeout_tip = CTkToolTip(self.modded_playertimeoutLabel,"server.properties setting: 'player-idle-timeout'")
-		self.modded_ratelimitIntvar = IntVar(value=MinecraftServerProperties.get('rate-limit'))
-		self.modded_ratelimitLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Rate Limit: ")
-		self.modded_ratelimitLabel.grid(row=8,column=0,sticky=E)
-		self.modded_ratelimitEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_ratelimitIntvar)
-		self.modded_ratelimitEntry.grid(row=8,column=1,sticky=W)
-		self.modded_ratelimit_tip = CTkToolTip(self.modded_ratelimitLabel,"server.properties setting: 'rate-limit'")
-		self.modded_functionPermissionlvlList = [str(x) for x in range(1,4)]
-		self.modded_functionPermissionlvlIntvar = IntVar(value=MinecraftServerProperties.get('function-permission-level'))
-		self.modded_functionPermissionlvlLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Fuction Permission Level: ")
-		self.modded_functionPermissionlvlLabel.grid(row=9,column=0,sticky=E)
-		self.modded_functionPermissionlvlComboBox = CTkComboBox(self.modded_NetworkSecurityTab,values=self.modded_functionPermissionlvlList,variable=self.modded_functionPermissionlvlIntvar)
-		self.modded_functionPermissionlvlComboBox.grid(row=9,column=1,sticky=W)
-		self.modded_functionPermissionlvl_tip = CTkToolTip(self.vanilla_functionPermissionlvlLabel,"server.properties setting: 'function-permission-level'")
-		self.modded_rconPasswordStringVar = StringVar(value=MinecraftServerProperties.get('rcon.password'))
-		self.modded_rconPasswordLabel = CTkLabel(self.modded_NetworkSecurityTab,text="RCON Password: ")
-		self.modded_rconPasswordLabel.grid(row=10,column=0,sticky=E)
-		self.modded_rconPasswordEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_rconPasswordStringVar)
-		self.modded_rconPasswordEntry.grid(row=10,column=1,sticky=W)
-		self.modded_rconPassword_tip = CTkToolTip(self.modded_rconPasswordLabel,"server.properties setting: 'rcon.password'")
-		self.modded_rconportIntVar = IntVar(value=MinecraftServerProperties.get('rcon.port'))
-		self.modded_rconportLabel = CTkLabel(self.modded_NetworkSecurityTab,text="RCON Port: ")
-		self.modded_rconportLabel.grid(row=11,column=0,sticky=E)
-		self.modded_rconportEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_rconportIntVar)
-		self.modded_rconportEntry.grid(row=11,column=1,sticky=W)
-		self.modded_rconport_tip = CTkToolTip(self.modded_rconportLabel,"server.properties setting: 'rcon.port'")
-		self.modded_queryportIntVar = IntVar(value=MinecraftServerProperties.get('query.port'))
-		self.modded_queryportLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Query Port: ")
-		self.modded_queryportLabel.grid(row=12,column=0,sticky=E)
-		self.modded_queryportEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_queryportIntVar)
-		self.modded_queryportEntry.grid(row=12,column=1,sticky=W)
-		self.modded_queryport_tip = CTkToolTip(self.modded_queryportLabel,"server.properties setting: 'query.port'")
-		self.modded_bugreportingStringVar = StringVar(value=MinecraftServerProperties.get('bug-report-link'))
-		self.modded_bugreportingLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Bug Report Link: ")
-		self.modded_bugreportingLabel.grid(row=13,column=0,sticky=E)
-		self.modded_bugreportingEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_bugreportingStringVar)
-		self.modded_bugreportingEntry.grid(row=13,column=1,sticky=W)
-		self.modded_bugreporting_tip = CTkToolTip(self.modded_bugreportingLabel,"server.properties setting: 'bug-report-link'")
-		#Networking Tab Bools
-		self.modded_NetworkSecurityTabBools = CTkFrame(self.modded_NetworkSecurityTab)
-		self.modded_NetworkSecurityTabBools.grid(row=13,column=0,columnspan=2,sticky=E)
-		self.modded_togglequery = BooleanVar(value=MinecraftServerProperties.get('enable-query'))
-		self.modded_canQueryCheck = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Enable Query",variable=self.modded_togglequery,onvalue=True,offvalue=False)
-		self.modded_canQueryCheck.grid(row=0,column=1,padx=3,pady=3,sticky=W)
-		self.modded_canquery_tip = CTkToolTip(self.modded_canQueryCheck,"server.properties setting: 'enable-query'")
-		self.modded_chunkwriteSyncingBool = BooleanVar(value=MinecraftServerProperties.get('sync-chunk-writes'))
-		self.modded_chunkwriteSyncingCheck = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Synchronized Chunk Writing",variable=self.modded_chunkwriteSyncingBool,onvalue=True,offvalue=False)
-		self.modded_chunkwriteSyncingCheck.grid(row=1,column=0,padx=3,pady=3,sticky=W)
-		self.modded_chunkwriteSyncing_tip = CTkToolTip(self.modded_chunkwriteSyncingCheck,"server.properties setting: 'sync-chunk-writes'")
-		self.modded_proxyBlockingBool = BooleanVar(value=MinecraftServerProperties.get('prevent-proxy-connections'))
-		self.modded_proxyBlockingCheck = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Block Proxy Connections",variable=self.modded_proxyBlockingBool,onvalue=True,offvalue=False)
-		self.modded_proxyBlockingCheck.grid(row=0,column=0,padx=3,pady=3,sticky=W)
-		self.modded_proxyblocking_tip = CTkToolTip(self.modded_proxyBlockingCheck,"server.properties setting: 'prevent-proxy-connections'")
-		self.modded_toggleOnlineMode = BooleanVar(value=MinecraftServerProperties.get('online-mode'))
-		self.modded_isOnline = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Online Mode",variable=self.modded_toggleOnlineMode,onvalue=True,offvalue=False)
-		self.modded_isOnline.grid(row=1,column=1,sticky=W,padx=3,pady=3)
-		self.modded_isonline_tip = CTkToolTip(self.modded_isOnline,"server.properties setting: 'online-mode'")
-		self.modded_jmxMonitoringBool = BooleanVar(value=MinecraftServerProperties.get('enable-jmx-monitoring'))
-		self.modded_jmxMonitoringCheck = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Toggle JMX Monitoring",variable=self.modded_jmxMonitoringBool,onvalue=True,offvalue=False)
-		self.modded_jmxMonitoringCheck.grid(row=2,column=0,sticky=W,pady=3,padx=3)
-		self.modded_jmxMonitoring_tip = CTkToolTip(self.modded_jmxMonitoringCheck,"server.properties setting: 'enable-jmx-monitoring'")
-		self.modded_isIPLogging = BooleanVar(value=MinecraftServerProperties.get('log-ips'))
-		self.modded_IPLogBool = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Log IPs",onvalue=True,offvalue=False,variable=self.modded_isIPLogging)
-		self.modded_IPLogBool.grid(row=2,column=1,padx=3,pady=3,sticky=W)
-		self.modded_togglerconBool = BooleanVar(value=MinecraftServerProperties.get('enable-rcon'))
-		self.modded_rconToggler = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Enable RCON",variable=self.modded_togglerconBool,onvalue=True,offvalue=False)
-		self.modded_rconToggler.grid(row=3,column=1,padx=3,pady=3,sticky=W)
-		self.modded_broadcastrconBool = BooleanVar(value=MinecraftServerProperties.get('broadcast-rcon-to-ops'))
-		self.modded_rconBroadcast = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Broadcast RCON",variable=self.modded_broadcastrconBool,onvalue=True,offvalue=False)
-		self.modded_rconBroadcast.grid(row=3,column=0,sticky=W,padx=3,pady=3)
-		self.modded_acceptTransfersBool = BooleanVar(value=MinecraftServerProperties.get('accept-transfers'))
-		self.modded_acceptTransfers = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Accept Transfers from Another Server",variable=self.modded_acceptTransfersBool,onvalue=True,offvalue=False)
-		self.modded_acceptTransfers.grid(row=4,column=0,padx=3,pady=3,sticky=W)
-		self.populateInstanceView(self.moddedinstanceView,"",self.modpacksFolder,"downloads")
-				
-		self.closebtn = CTkButton(self.root,text="Close",command=lambda:self.root.destroy())
-		self.closebtn.grid(row=1,column=0,sticky=E,pady=10)
+		try:
+			#Create the widget
+			self.root = CTkToplevel(self.parent)
+			self.rootTabs = CTkTabview(self.root)
+			self.rootTabs.grid(row=0,column=0,sticky="nsew")
+			self.rootTabs.add("Vanilla Server Instances")
+			self.rootTabs.add("Modded Server Instances")
+			self.parent.after(200,lambda:self.root.iconbitmap(str(rootFilepath) + "/base/ui/minecraftservercrafter.ico"))
+			self.root.title("Minerva Server Crafter - Lite Edition - Server Instances")
+			self.root.geometry("820x715")
+			#Treeview of the available vanilla instances
+			self.vanillatreeviewFrame = CTkFrame(self.rootTabs.tab("Vanilla Server Instances"))
+			self.vanillatreeviewFrame.grid(row=0,column=1,ipadx=10,ipady=10)
+			#Treeview widget
+			self.vanillainstanceView = ttk.Treeview(self.vanillatreeviewFrame)
+			self.vanillainstanceView.grid(row=1,column=0,ipadx=100,ipady=200)
+			self.vanillainstanceSelectbtn = CTkButton(self.vanillatreeviewFrame,text="Use Selected Instance",command=lambda:self.attachInstance(widget=self.vanillainstanceView))
+			self.vanillainstanceSelectbtn.grid(row=2,column=0,padx=3,pady=3)
+			self.vanillainstanceView.column("#0",width=200)
+			self.vanillainstanceView.heading("#0",text="Instances")
+			#Details of the instance
+			self.vanillainstanceDetailsFrame = CTkFrame(self.rootTabs.tab("Vanilla Server Instances"))
+			self.vanillainstanceDetailsFrame.grid(row=0,column=0,ipadx=10,padx=10)
+			self.vanillainstanceImageData = CTkImage(dark_image=Image.open(str(rootFilepath) + "/base/ui/default.png"),size=(150,150))
+			self.vanillainstanceImage = CTkLabel(self.vanillainstanceDetailsFrame,text="",image=self.vanillainstanceImageData)
+			self.vanillainstanceImage.grid(row=0,column=0,sticky=EW,columnspan=2,pady=10)
+			self.vanillainstanceName = CTkLabel(self.vanillainstanceDetailsFrame,text="To Begin, Select or create a new instance")
+			self.vanillainstanceName.grid(row=1,column=0,columnspan=2)
+			self.vanillainstancetargetedDirectory = CTkLabel(self.vanillainstanceDetailsFrame,text=" ")
+			self.vanillainstancetargetedDirectory.grid(row=2,column=0)
+			self.vanillainstanceservertype = CTkLabel(self.vanillainstanceDetailsFrame,text=" ")
+			self.vanillainstanceservertype.grid(row=3,column=0)
+			self.vanillainstanceminecraftVersion = CTkLabel(self.vanillainstanceDetailsFrame,text=" ")
+			self.vanillainstanceminecraftVersion.grid(row=4,column=0)
+			#Vanilla Instance creation area
+			self.creationTabsvanilla = CTkTabview(self.vanillainstanceDetailsFrame)
+			self.creationTabsvanilla.grid(row=5,column=0,columnspan=2)
+			self.creationTabsvanilla.add("Create Instance")
+			self.creationTabsvanilla.add("Instance Server Properties")
+			MCSC_Framework.onMainWindow_setTabState(self.creationTabsvanilla,"Instance Server Properties","disabled")
+			self.create_vanillainstanceFrame = CTkFrame(self.creationTabsvanilla.tab("Create Instance"))
+			self.create_vanillainstanceFrame.grid(row=5,column=0,padx=10,pady=10)
+			self.create_vanillainstance_instanceNameLabel = CTkLabel(self.create_vanillainstanceFrame,text="Instance Name: ")
+			self.create_vanillainstance_instanceNameLabel.grid(row=0,column=0,padx=10,pady=10)
+			self.create_vanillainstance_instanceNameEntry = CTkEntry(self.create_vanillainstanceFrame,placeholder_text="HINT: This is what your calling this instance")
+			self.create_vanillainstance_instanceNameEntry.grid(row=0,column=1,ipadx=100,columnspan=2)
+			self.create_vanillainstance_minecraftVersionLabel = CTkLabel(self.create_vanillainstanceFrame,text="Minecraft Server Version: ")
+			self.create_vanillainstance_minecraftVersionLabel.grid(row=1,column=0,padx=10,pady=10)
+			self.create_vanillainstance_minecraftVersionCombo = CTkComboBox(self.create_vanillainstanceFrame,values=self.mcversions)
+			self.create_vanillainstance_minecraftVersionCombo.grid(row=1,column=1,ipadx=100,columnspan=2)
+			self.create_vanillainstance_serverTypeLabel = CTkLabel(self.create_vanillainstanceFrame,text="Server Type: ")
+			self.create_vanillainstance_serverTypeLabel.grid(row=2,column=0,padx=10,pady=10)
+			self.create_vanillainstance_serverTypeCombo = CTkComboBox(self.create_vanillainstanceFrame,values=self.vanillaservertypes)
+			self.create_vanillainstance_serverTypeCombo.grid(row=2,column=1,ipadx=100,columnspan=2)
+			self.create_vanillainstance_serverDirectoryLabel = CTkLabel(self.create_vanillainstanceFrame,text="Server Directory: ")
+			self.create_vanillainstance_serverDirectoryLabel.grid(row=3,column=0,padx=10,pady=10)
+			self.create_vanillainstance_serverDirectoryLabel_directory = CTkLabel(self.create_vanillainstanceFrame,text=" ")
+			self.create_vanillainstance_serverDirectoryLabel_directory.grid(row=3,column=1)
+			self.create_vanillainstance_browseForServerDirectoryBtn = CTkButton(self.create_vanillainstanceFrame,text="Browse")
+			self.create_vanillainstance_browseForServerDirectoryBtn.grid(row=3,column=2,padx=1)
+			self.create_vanillainstance_generateInstanceBtn = CTkButton(self.create_vanillainstanceFrame,text="Generate Instance",command=self.buttonActionVanilla_onClickSubmit)
+			self.create_vanillainstance_generateInstanceBtn.grid(row=4,column=0)
+			self.create_vanillainstance_enforceserverDirectory = CTkCheckBox(self.create_vanillainstanceFrame,text="Strict Server Directory",onvalue=True,offvalue=False)
+			self.create_vanillainstance_enforceserverDirectory.grid(row=4,column=1)
+			#Vanilla Instance Server Properties tab
+			self.vanillaserverPropertiesFrame = CTkFrame(self.creationTabsvanilla.tab("Instance Server Properties"))
+			self.vanillaserverPropertiesFrame.pack(fill=BOTH,expand=True,anchor=W,ipadx=100)
+			self.vanillaserverPropertiesFrame_tabs = CTkTabview(self.vanillaserverPropertiesFrame)
+			self.vanillaserverPropertiesFrame_tabs.pack(fill=BOTH,expand=True,side=RIGHT,)
+			self.vanillaserverPropertiesFrame_tabs.add("World Settings")
+			self.vanillaserverPropertiesFrame_tabs.add("Network & Security")
+			#Action Panel
+			self.vanillaActionPanel = CTkFrame(self.vanillaserverPropertiesFrame)
+			self.vanillaActionPanel.pack(fill=Y,expand=True,side=LEFT)
+			#Server Type Image
+			self.vanillaServerTypeImage = CTkLabel(self.vanillaActionPanel, text="\n\n\n\nSettings Panel\n")
+			self.vanillaServerTypeImage.grid(row=0,column=0,pady=10)
+			self.vanillaImportPropertiesFileBtn = CTkButton(self.vanillaActionPanel,text="Import Settings from File",command=ServerFileIO.importPropertiesfromFile)
+			self.vanillaImportPropertiesFileBtn.grid(row=1,column=0)
+			self.vanillaImportPropertiesFile_tip = CTkToolTip(self.vanillaImportPropertiesFileBtn,"Imports server.properties Settings to JSON Model")
+			self.vanillaSavetoJSONFile = CTkButton(self.vanillaActionPanel,text="Apply Settings to JSON",command=lambda: self.exportToJSONModel(instanceName=str(ServerFileIO.getLastConfig()),useVersion=str(ServerFileIO.getVersionInfoFromLastConfig())))
+			self.vanillaSavetoJSONFile.grid(row=2,column=0)
+			self.vanillaSavetoJSONFile_tip = CTkToolTip(self.vanillaSavetoJSONFile,"Saves the JSON Model to properties.json")
+			self.vanillaConvertJSONData = CTkButton(self.vanillaActionPanel,text="Convert Settings to File",command=lambda:ServerFileIO.convertJSONPropertiestoPropertiesFile(rootFilepath))
+			self.vanillaConvertJSONData.grid(row=3,column=0)
+			self.vanillaConvertJSONData_tip = CTkToolTip(self.vanillaConvertJSONData,"Converts properties.json to server.properties, and saves it into the server directory")
+			#World Settings Tab
+			self.vanilla_WorldSettingsFrame = CTkScrollableFrame(self.vanillaserverPropertiesFrame_tabs.tab("World Settings"))
+			self.vanilla_WorldSettingsFrame.pack(fill=BOTH,expand=True,anchor=W)
+			self.vanilla_WorldNameLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="World Name: ")
+			self.vanilla_WorldNameLabel.grid(row=0,column=0,sticky=E)
+			self.vanilla_WorldNameStringVar = StringVar(value=MinecraftServerProperties.get("level-name"))
+			self.vanilla_WorldNameEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_WorldNameStringVar)
+			self.vanilla_WorldNameEntry.grid(row=0,column=1,sticky=W)
+			self.vanilla_WorldNameEntry_tip = CTkToolTip(self.vanilla_WorldNameLabel,"server.properties setting: 'level-name'")
+			self.vanilla_levelSeedLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="World Seed: ")
+			self.vanilla_levelSeedLabel.grid(row=1,column=0,sticky=E)
+			self.vanilla_levelSeedStringVar = StringVar(value=MinecraftServerProperties.get("level-seed"))
+			self.vanilla_levelSeedEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_levelSeedStringVar)
+			self.vanilla_levelSeedEntry.grid(row=1,column=1,sticky=W)
+			self.vanilla_levelSeedEntry_tip = CTkToolTip(self.vanilla_levelSeedLabel,"server.properties setting: 'level-seed'")
+			self.vanilla_gamemodeList = ["survival","creative","adventure","spectator"]
+			self.vanilla_gamemodeStringVar = StringVar(value=MinecraftServerProperties.get("gamemode"))
+			self.vanilla_gamemodeListLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Gamemode: ")
+			self.vanilla_gamemodeListLabel.grid(row=2,column=0,sticky=E)
+			self.vanilla_gamemodeListComboBox = CTkComboBox(self.vanilla_WorldSettingsFrame,values=self.vanilla_gamemodeList,variable=self.vanilla_gamemodeStringVar)
+			self.vanilla_gamemodeListComboBox.grid(row=2,column=1,sticky=W)
+			self.vanilla_gamemodeList_tip = CTkToolTip(self.vanilla_gamemodeListLabel,"server.properties setting: 'gamemode'")
+			self.vanilla_spawnprotectionRadiusInt = IntVar(value=MinecraftServerProperties.get('spawn-protection'))
+			self.vanilla_spawnprotectionradiusLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Spawn Protection Radius: ")
+			self.vanilla_spawnprotectionradiusLabel.grid(row=3,column=0,sticky=E)
+			self.vanilla_spawnprotectionradiusEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_spawnprotectionRadiusInt)
+			self.vanilla_spawnprotectionradiusEntry.grid(row=3,column=1,sticky=W)
+			self.vanilla_spawnprotection_tip = CTkToolTip(self.vanilla_spawnprotectionradiusLabel,"server.properties setting: 'spawn-protection'")
+			self.vanilla_worldsizeInt = IntVar(value=MinecraftServerProperties.get('max-world-size'))
+			self.vanilla_worldsizeLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="World Size: ")
+			self.vanilla_worldsizeLabel.grid(row=4,column=0,sticky=E)
+			self.vanilla_worldsizeEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_worldsizeInt)
+			self.vanilla_worldsizeEntry.grid(row=4,column=1,sticky=W)
+			self.vanilla_worldsize_tip = CTkToolTip(self.vanilla_worldsizeLabel,"server.properties settings: 'max-world-size'")
+			self.vanilla_worldtypeLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="World Type: ")
+			self.vanilla_worldtypeLabel.grid(row=5,column=0,sticky=E)
+			self.vanilla_worldtypeOptions = ["default","minecraft:normal","minecraft:flat","minecraft:large_biomes","minecraft:amplified","minecraft:single_biome_surface"]
+			self.vanilla_worldtypeStringVar = StringVar(value=MinecraftServerProperties.get("level-type"))
+			self.vanilla_worldtypeComboBox = CTkComboBox(self.vanilla_WorldSettingsFrame,values=self.vanilla_worldtypeOptions,variable=self.vanilla_worldtypeStringVar)
+			self.vanilla_worldtypeComboBox.grid(row=5,column=1,sticky=W)
+			self.vanilla_worldtype_tip = CTkToolTip(self.vanilla_worldtypeLabel,"server.properties setting: 'level-type'")
+			self.vanilla_worldDifficultyVar = StringVar(value=MinecraftServerProperties.get('difficulty'))
+			self.vanilla_worldDifficultyList = ['peaceful','easy','normal','hard']
+			self.vanilla_worldDifficultyComboBox = CTkComboBox(self.vanilla_WorldSettingsFrame,values=self.vanilla_worldDifficultyList,variable=self.vanilla_worldDifficultyVar)
+			self.vanilla_worldDifficultyComboBox.grid(row=6,column=1,sticky=W)
+			self.vanilla_worldDifficultyLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Server Difficulty: ")
+			self.vanilla_worldDifficultyLabel.grid(row=6,column=0,sticky=E)
+			self.vanilla_worldDifficulty_tip = CTkToolTip(self.vanilla_worldDifficultyLabel,"server.properties setting: 'difficulty'")
+			self.vanilla_playercountIntVar = IntVar(value=MinecraftServerProperties.get('max-players'))
+			self.vanilla_playercountLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Player Count: ")
+			self.vanilla_playercountLabel.grid(row=7,column=0,sticky=E)
+			self.vanilla_playercountEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_playercountIntVar)
+			self.vanilla_playercountEntry.grid(row=7,column=1,sticky=W)
+			self.vanilla_playercount_tip = CTkToolTip(self.vanilla_playercountLabel,"server.properties setting: 'max-players'")
+			self.vanilla_resourcePackPromptLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Resource Pack Prompt: ")
+			self.vanilla_resourcePackPromptLabel.grid(row=8,column=0,sticky=E)
+			self.vanilla_resourcePackPromptStringVar = StringVar(value=MinecraftServerProperties.get('resource-pack-prompt'))
+			self.vanilla_resourcePackPromptEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_resourcePackPromptStringVar)
+			self.vanilla_resourcePackPromptEntry.grid(row=8,column=1,sticky=W)
+			self.vanilla_resourcePackPromptLabel_tip = CTkToolTip(self.vanilla_resourcePackPromptLabel,"server.properties setting: 'resource-pack-prompt'")
+			self.vanilla_generatorsettingsvar = StringVar(value=MinecraftServerProperties.get('generator-settings'))
+			self.vanilla_generatorSettingsLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Generator Settings: ")
+			self.vanilla_generatorSettingsLabel.grid(row=9,column=0,sticky=E)
+			self.vanilla_generatorSettingsEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_generatorsettingsvar)
+			self.vanilla_generatorSettingsEntry.grid(row=9,column=1,sticky=W)
+			self.vanilla_generatorsettings_tip = CTkToolTip(self.vanilla_generatorSettingsLabel,"server.properties setting: 'generator-settings'")
+			self.vanilla_viewDistanceIntVar = IntVar(value=MinecraftServerProperties.get('view-distance'))
+			self.vanilla_viewDistanceLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="View Distance: ")
+			self.vanilla_viewDistanceLabel.grid(row=10,column=0,sticky=E)
+			self.vanilla_viewDistanceEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_viewDistanceIntVar)
+			self.vanilla_viewDistanceEntry.grid(row=10,column=1,sticky=W)
+			self.vanilla_viewDistance_tip = CTkToolTip(self.vanilla_viewDistanceLabel,"server.properties settings: 'view-distance'")
+			self.vanilla_simulationDistanceIntVar = IntVar(value=MinecraftServerProperties.get('simulation-distance'))
+			self.vanilla_simulationDistanceLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Simulation Distance: ")
+			self.vanilla_simulationDistanceLabel.grid(row=11,column=0,sticky=E)
+			self.vanilla_simulationDistanceEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_simulationDistanceIntVar)
+			self.vanilla_simulationDistanceEntry.grid(row=11,column=1,sticky=W)
+			self.vanilla_simulationDistance_tip = CTkToolTip(self.vanilla_simulationDistanceLabel,"server.properties setting: 'simulation-distance'")
+			self.vanilla_neighborupdatesIntVar = IntVar(value=MinecraftServerProperties.get('max-chained-neighbor-updates'))
+			self.vanilla_neighborupdatesLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Max Chained Updates: ")
+			self.vanilla_neighborupdatesLabel.grid(row=12,column=0,sticky=E)
+			self.vanilla_neighborupdatesEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_neighborupdatesIntVar)
+			self.vanilla_neighborupdatesEntry.grid(row=12,column=1,sticky=W)
+			self.vanilla_neighborupdates_tip = CTkToolTip(self.vanilla_neighborupdatesLabel,"server.properties setting: 'max-chained-neighbor-updates'")
+			self.vanilla_disableddataPackStringVar = StringVar(value=MinecraftServerProperties.get('initial-disabled-packs'))
+			self.vanilla_disableddataPackLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Disabled Datapacks: ")
+			self.vanilla_disableddataPackLabel.grid(row=13,column=0,sticky=E)
+			self.vanilla_disableddataPackEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_disableddataPackStringVar)
+			self.vanilla_disableddataPackEntry.grid(row=13,column=1,sticky=W)
+			self.vanilla_enableddatapacksStringVar = StringVar(value=MinecraftServerProperties.get('initial-enabled-packs'))
+			self.vanilla_enableddatapacksLabel = CTkLabel(self.vanilla_WorldSettingsFrame,text="Enabled Datapacks: ")
+			self.vanilla_enableddatapacksLabel.grid(row=14,column=0,sticky=E)
+			self.vanilla_enableddatapacksEntry = CTkEntry(self.vanilla_WorldSettingsFrame,textvariable=self.vanilla_enableddatapacksStringVar)
+			self.vanilla_enableddatapacksEntry.grid(row=14,column=1,sticky=W)
+			self.vanilla_resourcePackConfigurationBtn = CTkButton(self.vanilla_WorldSettingsFrame,text="Configure Resource Pack",command=MCSC_Framework.onMainWindow_openResourcePackConfig)
+			self.vanilla_resourcePackConfigurationBtn.grid(row=15,column=0,sticky=W,pady=3)
+			self.vanilla_MOTDConfigBtn = CTkButton(self.vanilla_WorldSettingsFrame,text="Configure MOTD",command=MCSC_Framework.onMainWindow_openMOTDConfig)
+			self.vanilla_MOTDConfigBtn.grid(row=15,column=1,sticky=W,pady=3)
+			#World Settings booleans
+			self.vanilla_WorldSettingsBools = CTkFrame(self.vanilla_WorldSettingsFrame)
+			self.vanilla_WorldSettingsBools.grid(row=16,column=0,columnspan=2)
+			self.vanilla_usecmdBlocksBoolVar = BooleanVar(value=MinecraftServerProperties.get("enable-command-block"))
+			self.vanilla_commandBlockUsage = CTkCheckBox(self.vanilla_WorldSettingsBools,onvalue=True,offvalue=False,text="Allow Command Blocks",variable=self.vanilla_usecmdBlocksBoolVar)
+			self.vanilla_commandBlockUsage.grid(row=0,column=0,sticky=W,padx=3)
+			self.vanilla_cmdBlock_tip = CTkToolTip(self.vanilla_commandBlockUsage,"server.properties setting: 'enable-command-block'")
+			self.vanilla_isPVPBool = BooleanVar(value=MinecraftServerProperties.get('pvp'))
+			self.vanilla_isPVP = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Allow PVP",variable=self.vanilla_isPVPBool,onvalue=True,offvalue=False)
+			self.vanilla_isPVP.grid(row=0,column=1,padx=3)
+			self.vanilla_pvp_tip = CTkToolTip(self.vanilla_isPVP,"server.properties setting: 'pvp'")
+			self.vanilla_strictGamemodeBool = BooleanVar(value=MinecraftServerProperties.get('force-gamemode'))
+			self.vanilla_strictGamemode = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Enforce Gamemode",variable=self.vanilla_strictGamemodeBool,onvalue=True,offvalue=False)
+			self.vanilla_strictGamemode.grid(row=1,column=0,padx=3,pady=3,sticky=W)
+			self.vanilla_strictGamemode_tip = CTkToolTip(self.vanilla_strictGamemode,"server.properties setting: 'force-gamemode'")
+			self.vanilla_resourcePackRequirementBool = BooleanVar(value=MinecraftServerProperties.get('require-resource-pack'))
+			self.vanilla_resourcePackRequirement = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Requires Resource Pack",variable=self.vanilla_resourcePackRequirementBool,onvalue=True,offvalue=False)
+			self.vanilla_resourcePackRequirement.grid(row=2,column=0,padx=3,sticky=NW)
+			self.vanilla_resourcePackRequirement_tip = CTkToolTip(self.vanilla_resourcePackRequirement,"server.properties setting: 'require-resource-pack'")
+			self.vanilla_netherDimension = BooleanVar(value=MinecraftServerProperties.get('allow-nether'))
+			self.vanilla_netherTravel = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Allow Nether",variable=self.vanilla_netherDimension,onvalue=True,offvalue=False)
+			self.vanilla_netherTravel.grid(row=1,column=1)
+			self.vanilla_canFly = BooleanVar(value=MinecraftServerProperties.get('allow-flight'))
+			self.vanilla_hasFlight = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Allow Flying",variable=self.vanilla_canFly,onvalue=True,offvalue=False)
+			self.vanilla_hasFlight.grid(row=2,column=1,padx=3,pady=3)
+			self.vanilla_flying_tip = CTkToolTip(self.vanilla_hasFlight, "server.properties setting: 'allow-flight'")
+			self.vanilla_netherTravel_tip = CTkToolTip(self.vanilla_netherTravel,"server.properties setting:'allow-nether'")
+			self.vanilla_isHardcoreWorldBool = BooleanVar(value=MinecraftServerProperties.get("hardcore"))
+			self.vanilla_isHardcore = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Hardcore World",variable=self.vanilla_isHardcoreWorldBool,onvalue=True,offvalue=False)
+			self.vanilla_isHardcore.grid(row=3,column=0,sticky=NW,padx=3)
+			self.vanilla_hardcore_tip = CTkToolTip(self.vanilla_isHardcore,"server.properties setting:'hardcore'")
+			self.vanilla_onlinePlayersHiddenBool = BooleanVar(value=MinecraftServerProperties.get('hide-online-players'))
+			self.vanilla_showOnlinePlayers = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Hide Online Players",variable=self.vanilla_onlinePlayersHiddenBool,onvalue=True,offvalue=False)
+			self.vanilla_showOnlinePlayers.grid(row=3,column=1,padx=3,sticky=W)
+			self.vanilla_visibeOnlinePlayers = CTkToolTip(self.vanilla_showOnlinePlayers,"server.properties setting: 'hide-online-players'")
+			self.vanilla_statusBool = BooleanVar(value=MinecraftServerProperties.get('enable-status'))
+			self.vanilla_toggleStatus = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Toggle Status",variable=self.vanilla_statusBool,onvalue=True,offvalue=False)
+			self.vanilla_toggleStatus.grid(row=4,column=0,padx=3,pady=3,sticky=W)
+			self.vanilla_strictProfileBool = BooleanVar(value=MinecraftServerProperties.get('enforce-secure-profile'))
+			self.vanilla_strictProfile = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Stricted Profiling",variable=self.vanilla_strictProfileBool,onvalue=True,offvalue=False)
+			self.vanilla_strictProfile.grid(row=5,column=0,sticky=W,padx=3)
+			self.vanilla_strictProfile_tip = CTkToolTip(self.vanilla_strictProfile,"server.properties setting: 'enforce-secure-profile'")
+			self.vanilla_nativeTransport = BooleanVar(value=MinecraftServerProperties.get('use-native-transport'))
+			self.vanilla_useNativeTransport = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Native Transport",variable=self.vanilla_nativeTransport,onvalue=True,offvalue=False)
+			self.vanilla_useNativeTransport.grid(row=6,column=0,sticky=W,padx=3,pady=3)
+			self.vanilla_nativeTransport_tip = CTkToolTip(self.vanilla_useNativeTransport,"server.properties setting: 'use-native-transport'")
+			self.vanilla_structureGeneration = BooleanVar(value=MinecraftServerProperties.get('generate-structures'))
+			self.vanilla_structureWillGenerate = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Structure Generation",variable=self.vanilla_structureGeneration,onvalue=True,offvalue=False)
+			self.vanilla_structureWillGenerate.grid(row=4,column=1,sticky=W,padx=3)
+			self.vanilla_structure_tip = CTkToolTip(self.vanilla_structureWillGenerate,"server.properties setting:'generate-structures'")
+			self.vanilla_npcSpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-npcs'))
+			self.vanilla_NPCspawning = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Spawn NPCs",variable=self.vanilla_npcSpawning,onvalue=True,offvalue=False)
+			self.vanilla_NPCspawning.grid(row=5,column=1,sticky=W,padx=3)
+			self.vanilla_npcSpawning_tip = CTkToolTip(self.vanilla_NPCspawning,"server.properties setting: 'spawn-npcs'")
+			self.vanilla_animalSpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-animals'))
+			self.vanilla_Animalspawning = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Spawn Animals",variable=self.vanilla_animalSpawning,onvalue=True,offvalue=False)
+			self.vanilla_Animalspawning.grid(row=6,column=1,sticky=W,padx=3)
+			self.vanilla_animalspawning_tip = CTkToolTip(self.vanilla_Animalspawning,"server.properties setting: 'spawn-animals'")
+			self.vanilla_enemySpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-monsters'))
+			self.vanilla_Enemyspawning = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Spawn Enemies",variable=self.vanilla_enemySpawning,onvalue=True,offvalue=False)
+			self.vanilla_Enemyspawning.grid(row=7,column=1,sticky=W,padx=3)
+			self.vanilla_enemyspawning_tip = CTkToolTip(self.vanilla_Enemyspawning,"server.properties setting: 'spawn-monsters'")
+			self.vanilla_broadcastConsoleBool = BooleanVar(value=MinecraftServerProperties.get('broadcast-console-to-ops'))
+			self.vanilla_broadcastConsole = CTkCheckBox(self.vanilla_WorldSettingsBools,text="Broadcast System Console",variable=self.vanilla_broadcastConsoleBool,onvalue=True,offvalue=False)
+			self.vanilla_broadcastConsole.grid(row=7,column=0,sticky=W,padx=3)
+			self.vanilla_broadcastconsole_tip = CTkToolTip(self.vanilla_broadcastConsole,"server.properties setting: 'broadcast-console-to-ops'")
+			#Network & Security Tab
+			self.vanilla_NetworkSecurityTab = CTkScrollableFrame(self.vanillaserverPropertiesFrame_tabs.tab("Network & Security"))
+			self.vanilla_NetworkSecurityTab.pack(fill=BOTH,expand=True,anchor=W)
+			self.vanilla_MinecraftServerIPStringVar = StringVar(value=MinecraftServerProperties.get('server-ip'))
+			self.vanilla_IPAddressLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Server IP: ")
+			self.vanilla_IPAddressLabel.grid(row=0,column=0,sticky=E)
+			self.vanilla_IPAddressEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_MinecraftServerIPStringVar)
+			self.vanilla_IPAddressEntry.grid(row=0,column=1,sticky=W)
+			self.vanilla_IPAddress_tip = CTkToolTip(self.vanilla_IPAddressLabel,"server.properties setting: 'server-ip'")
+			self.vanilla_NetworkCompressionIntVar = IntVar(value=MinecraftServerProperties.get('network-compression-threshold'))
+			self.vanilla_networkcompressionLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Network Compression: ")
+			self.vanilla_networkcompressionLabel.grid(row=1,column=0,sticky=E)
+			self.vanilla_networkCompressionEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_NetworkCompressionIntVar)
+			self.vanilla_networkCompressionEntry.grid(row=1,column=1,sticky=W)
+			self.vanilla_networkCompression_tip = CTkToolTip(self.vanilla_networkcompressionLabel,"server.properties setting: 'network-compression-threshold'")
+			self.vanilla_ticktimeIntVar = IntVar(value=MinecraftServerProperties.get('max-tick-time'))
+			self.vanilla_ticktimeLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Max Tick Rate: ")
+			self.vanilla_ticktimeLabel.grid(row=2,column=0,sticky=E)
+			self.vanilla_ticktimeEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_ticktimeIntVar)
+			self.vanilla_ticktimeEntry.grid(row=2,column=1,sticky=W)
+			self.vanilla_ticktime_tip = CTkToolTip(self.vanilla_ticktimeLabel,"server.properties setting: 'max-tick-time'")
+			self.vanilla_maxplayersIntVar = IntVar(value=MinecraftServerProperties.get('max-players'))
+			self.vanilla_maxplayersLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Max Players: ")
+			self.vanilla_maxplayersLabel.grid(row=3,column=0,sticky=E)
+			self.vanilla_maxplayersEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_maxplayersIntVar)
+			self.vanilla_maxplayersEntry.grid(row=3,column=1,sticky=W)
+			self.vanilla_maxplayers_tip = CTkToolTip(self.vanilla_maxplayersLabel,"server.properties setting: 'max-players'")
+			self.vanilla_serverportIntVar = IntVar(value=MinecraftServerProperties.get('server-port'))
+			self.vanilla_serverportLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Server Port: ")
+			self.vanilla_serverportLabel.grid(row=4,column=0,sticky=E)
+			self.vanilla_serverportEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_serverportIntVar)
+			self.vanilla_serverportEntry.grid(row=4,column=1,sticky=W)
+			self.vanilla_serverport_tip = CTkToolTip(self.vanilla_serverportLabel,"server.properties setting: 'server-port'")
+			self.vanilla_opPermissionlvlList = ["0","1","2","3","4"]
+			self.vanilla_opPermissionlvlIntVar = IntVar(value=MinecraftServerProperties.get('op-permission-level'))
+			self.vanilla_opPermissionlvlLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Op Permission Level: ")
+			self.vanilla_opPermissionlvlLabel.grid(row=5,column=0,sticky=E)
+			self.vanilla_opPermissionlvlComboBox = CTkComboBox(self.vanilla_NetworkSecurityTab,values=self.vanilla_opPermissionlvlList,variable=self.vanilla_opPermissionlvlIntVar)
+			self.vanilla_opPermissionlvlComboBox.grid(row=5,column=1,sticky=W)
+			self.vanilla_opPermissionlvl_tip = CTkToolTip(self.vanilla_opPermissionlvlLabel,"server.properties setting: 'op-permission-level'")
+			self.vanilla_entitybroadcastRangeList = [str(i) for i in range(10,1000)] #Best way of generating numbers from its set range
+			self.vanilla_entitybroadcastRangeIntVar = IntVar(value=MinecraftServerProperties.get('entity-broadcast-range-percentage'))
+			self.vanilla_entitybroadcastRangeLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Entity Broadcasting: ")
+			self.vanilla_entitybroadcastRangeLabel.grid(row=6,column=0,sticky=E)
+			self.vanilla_entitybroadcastRangeCombobox = CTkComboBox(self.vanilla_NetworkSecurityTab,values=self.vanilla_entitybroadcastRangeList,variable=self.vanilla_entitybroadcastRangeIntVar)
+			self.vanilla_entitybroadcastRangeCombobox.grid(row=6,column=1,sticky=W)
+			self.vanilla_entitybroadcastRange_tip = CTkToolTip(self.vanilla_entitybroadcastRangeLabel,"server.properties setting: 'entity-broadcast-range-percentage")
+			self.vanilla_playertimeoutIntVar = IntVar(value=MinecraftServerProperties.get('player-idle-timeout'))
+			self.vanilla_playertimeoutLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Idle Player Timeout: ")
+			self.vanilla_playertimeoutLabel.grid(row=7,column=0,sticky=E)
+			self.vanilla_playertimeoutEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_playercountIntVar)
+			self.vanilla_playertimeoutEntry.grid(row=7,column=1,sticky=W)
+			self.vanilla_playertimeout_tip = CTkToolTip(self.vanilla_playertimeoutLabel,"server.properties setting: 'player-idle-timeout'")
+			self.vanilla_ratelimitIntvar = IntVar(value=MinecraftServerProperties.get('rate-limit'))
+			self.vanilla_ratelimitLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Rate Limit: ")
+			self.vanilla_ratelimitLabel.grid(row=8,column=0,sticky=E)
+			self.vanilla_ratelimitEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_ratelimitIntvar)
+			self.vanilla_ratelimitEntry.grid(row=8,column=1,sticky=W)
+			self.vanilla_ratelimit_tip = CTkToolTip(self.vanilla_ratelimitLabel,"server.properties setting: 'rate-limit'")
+			self.vanilla_functionPermissionlvlList = [str(x) for x in range(1,4)]
+			self.vanilla_functionPermissionlvlIntvar = IntVar(value=MinecraftServerProperties.get('function-permission-level'))
+			self.vanilla_functionPermissionlvlLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Fuction Permission Level: ")
+			self.vanilla_functionPermissionlvlLabel.grid(row=9,column=0,sticky=E)
+			self.vanilla_functionPermissionlvlComboBox = CTkComboBox(self.vanilla_NetworkSecurityTab,values=self.vanilla_functionPermissionlvlList,variable=self.vanilla_functionPermissionlvlIntvar)
+			self.vanilla_functionPermissionlvlComboBox.grid(row=9,column=1,sticky=W)
+			self.vanilla_functionPermissionlvl_tip = CTkToolTip(self.vanilla_functionPermissionlvlLabel,"server.properties setting: 'function-permission-level'")
+			self.vanilla_rconPasswordStringVar = StringVar(value=MinecraftServerProperties.get('rcon.password'))
+			self.vanilla_rconPasswordLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="RCON Password: ")
+			self.vanilla_rconPasswordLabel.grid(row=10,column=0,sticky=E)
+			self.vanilla_rconPasswordEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_rconPasswordStringVar)
+			self.vanilla_rconPasswordEntry.grid(row=10,column=1,sticky=W)
+			self.vanilla_rconPassword_tip = CTkToolTip(self.vanilla_rconPasswordLabel,"server.properties setting: 'rcon.password'")
+			self.vanilla_rconportIntVar = IntVar(value=MinecraftServerProperties.get('rcon.port'))
+			self.vanilla_rconportLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="RCON Port: ")
+			self.vanilla_rconportLabel.grid(row=11,column=0,sticky=E)
+			self.vanilla_rconportEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_rconportIntVar)
+			self.vanilla_rconportEntry.grid(row=11,column=1,sticky=W)
+			self.vanilla_rconport_tip = CTkToolTip(self.vanilla_rconportLabel,"server.properties setting: 'rcon.port'")
+			self.vanilla_queryportIntVar = IntVar(value=MinecraftServerProperties.get('query.port'))
+			self.vanilla_queryportLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Query Port: ")
+			self.vanilla_queryportLabel.grid(row=12,column=0,sticky=E)
+			self.vanilla_queryportEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_queryportIntVar)
+			self.vanilla_queryportEntry.grid(row=12,column=1,sticky=W)
+			self.vanilla_queryport_tip = CTkToolTip(self.vanilla_queryportLabel,"server.properties setting: 'query.port'")
+			self.vanilla_bugreportingStringVar = StringVar(value=MinecraftServerProperties.get('bug-report-link'))
+			self.vanilla_bugreportingLabel = CTkLabel(self.vanilla_NetworkSecurityTab,text="Bug Report Link: ")
+			self.vanilla_bugreportingLabel.grid(row=13,column=0,sticky=E)
+			self.vanilla_bugreportingEntry = CTkEntry(self.vanilla_NetworkSecurityTab,textvariable=self.vanilla_bugreportingStringVar)
+			self.vanilla_bugreportingEntry.grid(row=13,column=1,sticky=W)
+			self.vanilla_bugreporting_tip = CTkToolTip(self.vanilla_bugreportingLabel,"server.properties setting: 'bug-report-link'")
+			#Networking Tab Bools
+			self.vanilla_NetworkSecurityTabBools = CTkFrame(self.vanilla_NetworkSecurityTab)
+			self.vanilla_NetworkSecurityTabBools.grid(row=13,column=0,columnspan=2,sticky=E)
+			self.vanilla_togglequery = BooleanVar(value=MinecraftServerProperties.get('enable-query'))
+			self.vanilla_canQueryCheck = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Enable Query",variable=self.vanilla_togglequery,onvalue=True,offvalue=False)
+			self.vanilla_canQueryCheck.grid(row=0,column=1,padx=3,pady=3,sticky=W)
+			self.vanilla_canquery_tip = CTkToolTip(self.vanilla_canQueryCheck,"server.properties setting: 'enable-query'")
+			self.vanilla_chunkwriteSyncingBool = BooleanVar(value=MinecraftServerProperties.get('sync-chunk-writes'))
+			self.vanilla_chunkwriteSyncingCheck = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Synchronized Chunk Writing",variable=self.vanilla_chunkwriteSyncingBool,onvalue=True,offvalue=False)
+			self.vanilla_chunkwriteSyncingCheck.grid(row=1,column=0,padx=3,pady=3,sticky=W)
+			self.vanilla_chunkwriteSyncing_tip = CTkToolTip(self.vanilla_chunkwriteSyncingCheck,"server.properties setting: 'sync-chunk-writes'")
+			self.vanilla_proxyBlockingBool = BooleanVar(value=MinecraftServerProperties.get('prevent-proxy-connections'))
+			self.vanilla_proxyBlockingCheck = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Block Proxy Connections",variable=self.vanilla_proxyBlockingBool,onvalue=True,offvalue=False)
+			self.vanilla_proxyBlockingCheck.grid(row=0,column=0,padx=3,pady=3,sticky=W)
+			self.vanilla_proxyblocking_tip = CTkToolTip(self.vanilla_proxyBlockingCheck,"server.properties setting: 'prevent-proxy-connections'")
+			self.vanilla_toggleOnlineMode = BooleanVar(value=MinecraftServerProperties.get('online-mode'))
+			self.vanilla_isOnline = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Online Mode",variable=self.vanilla_toggleOnlineMode,onvalue=True,offvalue=False)
+			self.vanilla_isOnline.grid(row=1,column=1,sticky=W,padx=3,pady=3)
+			self.vanilla_isonline_tip = CTkToolTip(self.vanilla_isOnline,"server.properties setting: 'online-mode'")
+			self.vanilla_jmxMonitoringBool = BooleanVar(value=MinecraftServerProperties.get('enable-jmx-monitoring'))
+			self.vanilla_jmxMonitoringCheck = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Toggle JMX Monitoring",variable=self.vanilla_jmxMonitoringBool,onvalue=True,offvalue=False)
+			self.vanilla_jmxMonitoringCheck.grid(row=2,column=0,sticky=W,pady=3,padx=3)
+			self.vanilla_jmxMonitoring_tip = CTkToolTip(self.vanilla_jmxMonitoringCheck,"server.properties setting: 'enable-jmx-monitoring'")
+			self.vanilla_isIPLogging = BooleanVar(value=MinecraftServerProperties.get('log-ips'))
+			self.vanilla_IPLogBool = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Log IPs",onvalue=True,offvalue=False,variable=self.vanilla_isIPLogging)
+			self.vanilla_IPLogBool.grid(row=2,column=1,padx=3,pady=3,sticky=W)
+			self.vanilla_togglerconBool = BooleanVar(value=MinecraftServerProperties.get('enable-rcon'))
+			self.vanilla_rconToggler = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Enable RCON",variable=self.vanilla_togglerconBool,onvalue=True,offvalue=False)
+			self.vanilla_rconToggler.grid(row=3,column=1,padx=3,pady=3,sticky=W)
+			self.vanilla_broadcastrconBool = BooleanVar(value=MinecraftServerProperties.get('broadcast-rcon-to-ops'))
+			self.vanilla_rconBroadcast = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Broadcast RCON",variable=self.vanilla_broadcastrconBool,onvalue=True,offvalue=False)
+			self.vanilla_rconBroadcast.grid(row=3,column=0,sticky=W,padx=3,pady=3)
+			self.vanilla_acceptTransfersBool = BooleanVar(value=MinecraftServerProperties.get('accept-transfers'))
+			self.vanilla_acceptTransfers = CTkCheckBox(self.vanilla_NetworkSecurityTabBools,text="Accept Transfers from Another Server",variable=self.vanilla_acceptTransfersBool,onvalue=True,offvalue=False)
+			self.vanilla_acceptTransfers.grid(row=4,column=0,padx=3,pady=3,sticky=W)
+			self.populateInstanceView(self.vanillainstanceView,"",self.instancesFolder,"Modpacks")
+			self.vanillainstanceView.bind("<<TreeviewSelect>>",self.displayInstanceDetails)
+			#Treeview
+			self.moddedinstancesViewFrame = CTkFrame(self.rootTabs.tab("Modded Server Instances"))
+			self.moddedinstancesViewFrame.grid(row=0,column=1,ipadx=10,ipady=10)
+			self.moddedinstanceView = ttk.Treeview(self.moddedinstancesViewFrame)
+			self.moddedinstanceView.grid(row=0,column=0,ipadx=100,ipady=200)
+			self.moddedinstanceSelectbtn = CTkButton(self.moddedinstancesViewFrame,text="Use Selected Instance",command=lambda:self.attachInstance(widget=self.moddedinstanceView))
+			self.moddedinstanceSelectbtn.grid(row=1,column=0,padx=3,pady=3)
+			self.moddedinstanceView.column("#0",width=200)
+			self.moddedinstanceView.heading("#0",text="Modded Instances")
+			#Modded Instances Details
+			self.moddedinstanceDetailsFrame = CTkFrame(self.rootTabs.tab("Modded Server Instances"))
+			self.moddedinstanceDetailsFrame.grid(row=0,column=0,ipadx=10,padx=10)
+			self.moddedinstanceImageData = CTkImage(dark_image=Image.open(str(rootFilepath) + "/base/ui/default.png"),size=(150,150))
+			self.moddedinstanceImage = CTkLabel(self.moddedinstanceDetailsFrame,text="",image=self.moddedinstanceImageData)
+			self.moddedinstanceImage.grid(row=0,column=0,sticky=EW,columnspan=2,pady=10)
+			self.moddedinstanceName = CTkLabel(self.moddedinstanceDetailsFrame,text="To Begin, Select or create a new modded instance")
+			self.moddedinstanceName.grid(row=1,column=0,columnspan=2)
+			self.moddedinstancetargetedDirectory = CTkLabel(self.moddedinstanceDetailsFrame,text=" ")
+			self.moddedinstancetargetedDirectory.grid(row=2,column=0)
+			self.moddedinstanceservertype = CTkLabel(self.moddedinstanceDetailsFrame,text=" ")
+			self.moddedinstanceservertype.grid(row=3,column=0)
+			self.moddedinstanceminecraftVersion = CTkLabel(self.moddedinstanceDetailsFrame,text=" ")
+			self.moddedinstanceminecraftVersion.grid(row=4,column=0)
+			self.moddedinstancemodloaderversion = CTkLabel(self.moddedinstanceDetailsFrame,text=" ")
+			self.moddedinstancemodloaderversion.grid(row=5,column=0)
+			#Modded Instance creation area
+			self.creationTabsmodded = CTkTabview(self.moddedinstanceDetailsFrame)
+			self.creationTabsmodded.grid(row=7,column=0,columnspan=2)
+			self.creationTabsmodded.add("Create Instance")
+			self.creationTabsmodded.add("Curseforge Modpacks")
+			self.creationTabsmodded.add("Instance Server Properties")
+			MCSC_Framework.onMainWindow_setTabState(self.creationTabsmodded,"Instance Server Properties","disabled")
+			self.create_moddedinstanceFrame = CTkFrame(self.creationTabsmodded.tab("Create Instance"))
+			self.create_moddedinstanceFrame.grid(row=5,column=0,padx=10,pady=10)
+			self.create_moddedinstance_instanceNameLabel = CTkLabel(self.create_moddedinstanceFrame,text="Instance Name: ")
+			self.create_moddedinstance_instanceNameLabel.grid(row=0,column=0,padx=10,pady=10)
+			self.create_moddedinstance_instanceNameEntry = CTkEntry(self.create_moddedinstanceFrame,placeholder_text="HINT: This is what your calling this instance")
+			self.create_moddedinstance_instanceNameEntry.grid(row=0,column=1,ipadx=100,columnspan=2)
+			self.create_moddedinstance_serverTypeLabel = CTkLabel(self.create_moddedinstanceFrame,text="Server Type: ")
+			self.create_moddedinstance_serverTypeLabel.grid(row=1,column=0,padx=10,pady=10)
+			self.create_moddedinstance_serverTypeCombo = CTkComboBox(self.create_moddedinstanceFrame,values=self.moddedservertypes,command=self.setMCVersions)
+			self.create_moddedinstance_serverTypeCombo.grid(row=1,column=1,ipadx=100,columnspan=2)
+			self.create_moddedinstance_minecraftVersionLabel = CTkLabel(self.create_moddedinstanceFrame,text="Minecraft Server Version: ")
+			self.create_moddedinstance_minecraftVersionLabel.grid(row=2,column=0,padx=10,pady=10)
+			self.create_moddedinstance_minecraftVersionStringVar = StringVar()
+			self.create_moddedinstance_minecraftVersionCombo = CTkComboBox(self.create_moddedinstanceFrame,values=[],variable=self.create_moddedinstance_minecraftVersionStringVar,command=self.setServerTypeVersions)
+			self.create_moddedinstance_minecraftVersionCombo.grid(row=2,column=1,ipadx=100,columnspan=2)
+			self.create_moddedinstance_serverTypeVersionLabel = CTkLabel(self.create_moddedinstanceFrame,text="Server Type Version: ")
+			self.create_moddedinstance_serverTypeVersionLabel.grid(row=3,column=0,padx=10,pady=10)
+			self.create_moddedinstance_serverTypeVersionStringVar = StringVar()
+			self.create_moddedinstance_serverTypeVersionCombo = CTkComboBox(self.create_moddedinstanceFrame,values=[],variable=self.create_moddedinstance_serverTypeVersionStringVar)
+			self.create_moddedinstance_serverTypeVersionCombo.grid(row=3,column=1,columnspan=2,ipadx=100)
+			self.create_moddedinstance_serverDirectoryLabel = CTkLabel(self.create_moddedinstanceFrame,text="Server Directory: ")
+			self.create_moddedinstance_serverDirectoryLabel.grid(row=4,column=0,padx=10,pady=10)
+			self.create_moddedinstance_serverDirectoryLabel_directory = CTkLabel(self.create_moddedinstanceFrame,text=" ")
+			self.create_moddedinstance_serverDirectoryLabel_directory.grid(row=4,column=1)
+			self.create_moddedinstance_browseForServerDirectoryBtn = CTkButton(self.create_moddedinstanceFrame,text="Browse")
+			self.create_moddedinstance_browseForServerDirectoryBtn.grid(row=4,column=2,padx=1)
+			self.create_moddedinstance_generateInstanceBtn = CTkButton(self.create_moddedinstanceFrame,text="Generate Instance",command=self.buttonActionModded_onClickSubmit)
+			self.create_moddedinstance_generateInstanceBtn.grid(row=5,column=0)
+			self.create_moddedinstance_enforceserverDirectory = CTkCheckBox(self.create_moddedinstanceFrame,text="Strict Server Directory",onvalue=True,offvalue=False)
+			self.create_moddedinstance_enforceserverDirectory.grid(row=5,column=1)
+			#Curseforge Modpacks Tab
+			self.curseforgemodpacksFrame = CTkFrame(self.creationTabsmodded.tab("Curseforge Modpacks"))
+			self.curseforgemodpacksFrame.grid(row=0,column=0)
+			self.officialModpacksFrame = CTkFrame(self.curseforgemodpacksFrame)
+			self.officialModpacksFrame.grid(row=0,column=0,columnspan=3)
+			self.searchBar = CTkEntry(self.officialModpacksFrame,placeholder_text="Search for Modpack on Curseforge")
+			self.searchBar.grid(row=0,column=0,columnspan=3,sticky=W,ipadx=50)
+			self.searchbtn = CTkButton(self.officialModpacksFrame,text="Search Modpack",command=lambda: self.onSearchModpack())
+			self.searchbtn.grid(row=0,column=4,sticky=W)
+			self.searchframe = CTkFrame(self.officialModpacksFrame)
+			self.searchframe.grid(row=1,column=0,columnspan=5,sticky=EW)
+			self.searchQueryList = CTkListbox(self.searchframe,multiple_selection=False)
+			self.searchQueryList.pack(fill=BOTH,expand=True,ipadx=100,ipady=50)
+			self.downloadandImportbtn = CTkButton(self.officialModpacksFrame,text="Import Selected Modpack",command=lambda:self.buttonActionModded_onSubmitModpack())
+			self.downloadandImportbtn.grid(row=2,column=2,columnspan=3,sticky=E)
+			self.specialLabel = CTkLabel(self.officialModpacksFrame,text="Results by: Modpack Index")
+			self.specialLabel.grid(row=2,column=0)
+			#Modded Instance Server Properties tab
+			self.moddedserverPropertiesFrame = CTkFrame(self.creationTabsmodded.tab("Instance Server Properties"))
+			self.moddedserverPropertiesFrame.pack(fill=BOTH,expand=True,anchor=W,ipadx=100)
+			self.moddedserverPropertiesFrame_tabs = CTkTabview(self.moddedserverPropertiesFrame)
+			self.moddedserverPropertiesFrame_tabs.pack(fill=BOTH,expand=True,side=RIGHT)
+			self.moddedserverPropertiesFrame_tabs.add("World Settings")
+			self.moddedserverPropertiesFrame_tabs.add("Network & Security")
+			#Action Panel
+			self.moddedActionPanel = CTkFrame(self.moddedserverPropertiesFrame)
+			self.moddedActionPanel.pack(fill=Y,expand=True,side=LEFT)
+			#Server Type Image
+			self.moddedServerTypeImage = CTkLabel(self.moddedActionPanel, text="\n\n\n\nSettings Panel\n")
+			self.moddedServerTypeImage.grid(row=0,column=0,pady=10)
+			self.moddedImportPropertiesFileBtn = CTkButton(self.moddedActionPanel,text="Import Settings from File",command=ServerFileIO.importPropertiesfromFile)
+			self.moddedImportPropertiesFileBtn.grid(row=1,column=0)
+			self.moddedImportPropertiesFile_tip = CTkToolTip(self.moddedImportPropertiesFileBtn,"Imports server.properties Settings to JSON Model")
+			self.moddedSavetoJSONFile = CTkButton(self.moddedActionPanel,text="Apply Settings to JSON",command=lambda: self.exportToJSONModel(instanceName=str(ServerFileIO.getLastConfig()),useVersion=str(ServerFileIO.getVersionInfoFromLastConfig())))
+			self.moddedSavetoJSONFile.grid(row=2,column=0)
+			self.moddedSavetoJSONFile_tip = CTkToolTip(self.moddedSavetoJSONFile,"Saves the JSON Model to properties.json")
+			self.moddedConvertJSONData = CTkButton(self.moddedActionPanel,text="Convert Settings to File",command=lambda:ServerFileIO.convertJSONPropertiestoPropertiesFile(rootFilepath))
+			self.moddedConvertJSONData.grid(row=3,column=0)
+			self.moddedConvertJSONData_tip = CTkToolTip(self.moddedConvertJSONData,"Converts properties.json to server.properties, and saves it into the server directory")
+			#World Settings Tab
+			self.modded_WorldSettingsFrame = CTkScrollableFrame(self.moddedserverPropertiesFrame_tabs.tab("World Settings"))
+			self.modded_WorldSettingsFrame.pack(fill=BOTH,expand=True,anchor=W)
+			self.modded_WorldNameLabel = CTkLabel(self.modded_WorldSettingsFrame,text="World Name: ")
+			self.modded_WorldNameLabel.grid(row=0,column=0,sticky=E)
+			self.modded_WorldNameStringVar = StringVar(value=MinecraftServerProperties.get("level-name"))
+			self.modded_WorldNameEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_WorldNameStringVar)
+			self.modded_WorldNameEntry.grid(row=0,column=1,sticky=W)
+			self.modded_WorldNameEntry_tip = CTkToolTip(self.modded_WorldNameLabel,"server.properties setting: 'level-name'")
+			self.modded_levelSeedLabel = CTkLabel(self.modded_WorldSettingsFrame,text="World Seed: ")
+			self.modded_levelSeedLabel.grid(row=1,column=0,sticky=E)
+			self.modded_levelSeedStringVar = StringVar(value=MinecraftServerProperties.get("level-seed"))
+			self.modded_levelSeedEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_levelSeedStringVar)
+			self.modded_levelSeedEntry.grid(row=1,column=1,sticky=W)
+			self.modded_levelSeedEntry_tip = CTkToolTip(self.modded_levelSeedLabel,"server.properties setting: 'level-seed'")
+			self.modded_gamemodeList = ["survival","creative","adventure","spectator"]
+			self.modded_gamemodeStringVar = StringVar(value=MinecraftServerProperties.get("gamemode"))
+			self.modded_gamemodeListLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Gamemode: ")
+			self.modded_gamemodeListLabel.grid(row=2,column=0,sticky=E)
+			self.modded_gamemodeListComboBox = CTkComboBox(self.modded_WorldSettingsFrame,values=self.modded_gamemodeList,variable=self.modded_gamemodeStringVar)
+			self.modded_gamemodeListComboBox.grid(row=2,column=1,sticky=W)
+			self.modded_gamemodeList_tip = CTkToolTip(self.modded_gamemodeListLabel,"server.properties setting: 'gamemode'")
+			self.modded_spawnprotectionRadiusInt = IntVar(value=MinecraftServerProperties.get('spawn-protection'))
+			self.modded_spawnprotectionradiusLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Spawn Protection Radius: ")
+			self.modded_spawnprotectionradiusLabel.grid(row=3,column=0,sticky=E)
+			self.modded_spawnprotectionradiusEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_spawnprotectionRadiusInt)
+			self.modded_spawnprotectionradiusEntry.grid(row=3,column=1,sticky=W)
+			self.modded_spawnprotection_tip = CTkToolTip(self.modded_spawnprotectionradiusLabel,"server.properties setting: 'spawn-protection'")
+			self.modded_worldsizeInt = IntVar(value=MinecraftServerProperties.get('max-world-size'))
+			self.modded_worldsizeLabel = CTkLabel(self.modded_WorldSettingsFrame,text="World Size: ")
+			self.modded_worldsizeLabel.grid(row=4,column=0,sticky=E)
+			self.modded_worldsizeEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_worldsizeInt)
+			self.modded_worldsizeEntry.grid(row=4,column=1,sticky=W)
+			self.modded_worldsize_tip = CTkToolTip(self.modded_worldsizeLabel,"server.properties settings: 'max-world-size'")
+			self.modded_worldtypeLabel = CTkLabel(self.modded_WorldSettingsFrame,text="World Type: ")
+			self.modded_worldtypeLabel.grid(row=5,column=0,sticky=E)
+			self.modded_worldtypeOptions = ["default","minecraft:normal","minecraft:flat","minecraft:large_biomes","minecraft:amplified","minecraft:single_biome_surface"]
+			self.modded_worldtypeStringVar = StringVar(value=MinecraftServerProperties.get("level-type"))
+			self.modded_worldtypeComboBox = CTkComboBox(self.modded_WorldSettingsFrame,values=self.modded_worldtypeOptions,variable=self.modded_worldtypeStringVar)
+			self.modded_worldtypeComboBox.grid(row=5,column=1,sticky=W)
+			self.modded_worldtype_tip = CTkToolTip(self.modded_worldtypeLabel,"server.properties setting: 'level-type'")
+			self.modded_worldDifficultyVar = StringVar(value=MinecraftServerProperties.get('difficulty'))
+			self.modded_worldDifficultyList = ['peaceful','easy','normal','hard']
+			self.modded_worldDifficultyComboBox = CTkComboBox(self.modded_WorldSettingsFrame,values=self.modded_worldDifficultyList,variable=self.modded_worldDifficultyVar)
+			self.modded_worldDifficultyComboBox.grid(row=6,column=1,sticky=W)
+			self.modded_worldDifficultyLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Server Difficulty: ")
+			self.modded_worldDifficultyLabel.grid(row=6,column=0,sticky=E)
+			self.modded_worldDifficulty_tip = CTkToolTip(self.modded_worldDifficultyLabel,"server.properties setting: 'difficulty'")
+			self.modded_playercountIntVar = IntVar(value=MinecraftServerProperties.get('max-players'))
+			self.modded_playercountLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Player Count: ")
+			self.modded_playercountLabel.grid(row=7,column=0,sticky=E)
+			self.modded_playercountEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_playercountIntVar)
+			self.modded_playercountEntry.grid(row=7,column=1,sticky=W)
+			self.modded_playercount_tip = CTkToolTip(self.modded_playercountLabel,"server.properties setting: 'max-players'")
+			self.modded_resourcePackPromptLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Resource Pack Prompt: ")
+			self.modded_resourcePackPromptLabel.grid(row=8,column=0,sticky=E)
+			self.modded_resourcePackPromptStringVar = StringVar(value=MinecraftServerProperties.get('resource-pack-prompt'))
+			self.modded_resourcePackPromptEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_resourcePackPromptStringVar)
+			self.modded_resourcePackPromptEntry.grid(row=8,column=1,sticky=W)
+			self.modded_resourcePackPromptLabel_tip = CTkToolTip(self.modded_resourcePackPromptLabel,"server.properties setting: 'resource-pack-prompt'")
+			self.modded_generatorsettingsvar = StringVar(value=MinecraftServerProperties.get('generator-settings'))
+			self.modded_generatorSettingsLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Generator Settings: ")
+			self.modded_generatorSettingsLabel.grid(row=9,column=0,sticky=E)
+			self.modded_generatorSettingsEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_generatorsettingsvar)
+			self.modded_generatorSettingsEntry.grid(row=9,column=1,sticky=W)
+			self.modded_generatorsettings_tip = CTkToolTip(self.modded_generatorSettingsLabel,"server.properties setting: 'generator-settings'")
+			self.modded_viewDistanceIntVar = IntVar(value=MinecraftServerProperties.get('view-distance'))
+			self.modded_viewDistanceLabel = CTkLabel(self.modded_WorldSettingsFrame,text="View Distance: ")
+			self.modded_viewDistanceLabel.grid(row=10,column=0,sticky=E)
+			self.modded_viewDistanceEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_viewDistanceIntVar)
+			self.modded_viewDistanceEntry.grid(row=10,column=1,sticky=W)
+			self.modded_viewDistance_tip = CTkToolTip(self.modded_viewDistanceLabel,"server.properties settings: 'view-distance'")
+			self.modded_simulationDistanceIntVar = IntVar(value=MinecraftServerProperties.get('simulation-distance'))
+			self.modded_simulationDistanceLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Simulation Distance: ")
+			self.modded_simulationDistanceLabel.grid(row=11,column=0,sticky=E)
+			self.modded_simulationDistanceEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_simulationDistanceIntVar)
+			self.modded_simulationDistanceEntry.grid(row=11,column=1,sticky=W)
+			self.modded_simulationDistance_tip = CTkToolTip(self.modded_simulationDistanceLabel,"server.properties setting: 'simulation-distance'")
+			self.modded_neighborupdatesIntVar = IntVar(value=MinecraftServerProperties.get('max-chained-neighbor-updates'))
+			self.modded_neighborupdatesLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Max Chained Updates: ")
+			self.modded_neighborupdatesLabel.grid(row=12,column=0,sticky=E)
+			self.modded_neighborupdatesEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_neighborupdatesIntVar)
+			self.modded_neighborupdatesEntry.grid(row=12,column=1,sticky=W)
+			self.modded_neighborupdates_tip = CTkToolTip(self.modded_neighborupdatesLabel,"server.properties setting: 'max-chained-neighbor-updates'")
+			self.modded_disableddataPackStringVar = StringVar(value=MinecraftServerProperties.get('initial-disabled-packs'))
+			self.modded_disableddataPackLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Disabled Datapacks: ")
+			self.modded_disableddataPackLabel.grid(row=13,column=0,sticky=E)
+			self.modded_disableddataPackEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_disableddataPackStringVar)
+			self.modded_disableddataPackEntry.grid(row=13,column=1,sticky=W)
+			self.modded_enableddatapacksStringVar = StringVar(value=MinecraftServerProperties.get('initial-enabled-packs'))
+			self.modded_enableddatapacksLabel = CTkLabel(self.modded_WorldSettingsFrame,text="Enabled Datapacks: ")
+			self.modded_enableddatapacksLabel.grid(row=14,column=0,sticky=E)
+			self.modded_enableddatapacksEntry = CTkEntry(self.modded_WorldSettingsFrame,textvariable=self.modded_enableddatapacksStringVar)
+			self.modded_enableddatapacksEntry.grid(row=14,column=1,sticky=W)
+			self.modded_resourcePackConfigurationBtn = CTkButton(self.modded_WorldSettingsFrame,text="Configure Resource Pack",command=MCSC_Framework.onMainWindow_openResourcePackConfig)
+			self.modded_resourcePackConfigurationBtn.grid(row=15,column=0,sticky=W,pady=3)
+			self.modded_MOTDConfigBtn = CTkButton(self.modded_WorldSettingsFrame,text="Configure MOTD",command=MCSC_Framework.onMainWindow_openMOTDConfig)
+			self.modded_MOTDConfigBtn.grid(row=15,column=1,sticky=W,pady=3)
+			#World Settings booleans
+			self.modded_WorldSettingsBools = CTkFrame(self.modded_WorldSettingsFrame)
+			self.modded_WorldSettingsBools.grid(row=16,column=0,columnspan=2)
+			self.modded_usecmdBlocksBoolVar = BooleanVar(value=MinecraftServerProperties.get("enable-command-block"))
+			self.modded_commandBlockUsage = CTkCheckBox(self.modded_WorldSettingsBools,onvalue=True,offvalue=False,text="Allow Command Blocks",variable=self.modded_usecmdBlocksBoolVar)
+			self.modded_commandBlockUsage.grid(row=0,column=0,sticky=W,padx=3)
+			self.modded_cmdBlock_tip = CTkToolTip(self.modded_commandBlockUsage,"server.properties setting: 'enable-command-block'")
+			self.modded_isPVPBool = BooleanVar(value=MinecraftServerProperties.get('pvp'))
+			self.modded_isPVP = CTkCheckBox(self.modded_WorldSettingsBools,text="Allow PVP",variable=self.modded_isPVPBool,onvalue=True,offvalue=False)
+			self.modded_isPVP.grid(row=0,column=1,padx=3)
+			self.modded_pvp_tip = CTkToolTip(self.modded_isPVP,"server.properties setting: 'pvp'")
+			self.modded_strictGamemodeBool = BooleanVar(value=MinecraftServerProperties.get('force-gamemode'))
+			self.modded_strictGamemode = CTkCheckBox(self.modded_WorldSettingsBools,text="Enforce Gamemode",variable=self.modded_strictGamemodeBool,onvalue=True,offvalue=False)
+			self.modded_strictGamemode.grid(row=1,column=0,padx=3,pady=3,sticky=W)
+			self.modded_strictGamemode_tip = CTkToolTip(self.modded_strictGamemode,"server.properties setting: 'force-gamemode'")
+			self.modded_resourcePackRequirementBool = BooleanVar(value=MinecraftServerProperties.get('require-resource-pack'))
+			self.modded_resourcePackRequirement = CTkCheckBox(self.modded_WorldSettingsBools,text="Requires Resource Pack",variable=self.modded_resourcePackRequirementBool,onvalue=True,offvalue=False)
+			self.modded_resourcePackRequirement.grid(row=2,column=0,padx=3,sticky=NW)
+			self.modded_resourcePackRequirement_tip = CTkToolTip(self.modded_resourcePackRequirement,"server.properties setting: 'require-resource-pack'")
+			self.modded_netherDimension = BooleanVar(value=MinecraftServerProperties.get('allow-nether'))
+			self.modded_netherTravel = CTkCheckBox(self.modded_WorldSettingsBools,text="Allow Nether",variable=self.modded_netherDimension,onvalue=True,offvalue=False)
+			self.modded_netherTravel.grid(row=1,column=1)
+			self.modded_canFly = BooleanVar(value=MinecraftServerProperties.get('allow-flight'))
+			self.modded_hasFlight = CTkCheckBox(self.modded_WorldSettingsBools,text="Allow Flying",variable=self.modded_canFly,onvalue=True,offvalue=False)
+			self.modded_hasFlight.grid(row=2,column=1,padx=3,pady=3)
+			self.modded_flying_tip = CTkToolTip(self.modded_hasFlight, "server.properties setting: 'allow-flight'")
+			self.modded_netherTravel_tip = CTkToolTip(self.modded_netherTravel,"server.properties setting:'allow-nether'")
+			self.modded_isHardcoreWorldBool = BooleanVar(value=MinecraftServerProperties.get("hardcore"))
+			self.modded_isHardcore = CTkCheckBox(self.modded_WorldSettingsBools,text="Hardcore World",variable=self.modded_isHardcoreWorldBool,onvalue=True,offvalue=False)
+			self.modded_isHardcore.grid(row=3,column=0,sticky=NW,padx=3)
+			self.modded_hardcore_tip = CTkToolTip(self.modded_isHardcore,"server.properties setting:'hardcore'")
+			self.modded_onlinePlayersHiddenBool = BooleanVar(value=MinecraftServerProperties.get('hide-online-players'))
+			self.modded_showOnlinePlayers = CTkCheckBox(self.modded_WorldSettingsBools,text="Hide Online Players",variable=self.modded_onlinePlayersHiddenBool,onvalue=True,offvalue=False)
+			self.modded_showOnlinePlayers.grid(row=3,column=1,padx=3,sticky=W)
+			self.modded_visibeOnlinePlayers = CTkToolTip(self.modded_showOnlinePlayers,"server.properties setting: 'hide-online-players'")
+			self.modded_statusBool = BooleanVar(value=MinecraftServerProperties.get('enable-status'))
+			self.modded_toggleStatus = CTkCheckBox(self.modded_WorldSettingsBools,text="Toggle Status",variable=self.modded_statusBool,onvalue=True,offvalue=False)
+			self.modded_toggleStatus.grid(row=4,column=0,padx=3,pady=3,sticky=W)
+			self.modded_strictProfileBool = BooleanVar(value=MinecraftServerProperties.get('enforce-secure-profile'))
+			self.modded_strictProfile = CTkCheckBox(self.modded_WorldSettingsBools,text="Stricted Profiling",variable=self.modded_strictProfileBool,onvalue=True,offvalue=False)
+			self.modded_strictProfile.grid(row=5,column=0,sticky=W,padx=3)
+			self.modded_strictProfile_tip = CTkToolTip(self.modded_strictProfile,"server.properties setting: 'enforce-secure-profile'")
+			self.modded_nativeTransport = BooleanVar(value=MinecraftServerProperties.get('use-native-transport'))
+			self.modded_useNativeTransport = CTkCheckBox(self.modded_WorldSettingsBools,text="Native Transport",variable=self.modded_nativeTransport,onvalue=True,offvalue=False)
+			self.modded_useNativeTransport.grid(row=6,column=0,sticky=W,padx=3,pady=3)
+			self.modded_nativeTransport_tip = CTkToolTip(self.modded_useNativeTransport,"server.properties setting: 'use-native-transport'")
+			self.modded_structureGeneration = BooleanVar(value=MinecraftServerProperties.get('generate-structures'))
+			self.modded_structureWillGenerate = CTkCheckBox(self.modded_WorldSettingsBools,text="Structure Generation",variable=self.modded_structureGeneration,onvalue=True,offvalue=False)
+			self.modded_structureWillGenerate.grid(row=4,column=1,sticky=W,padx=3)
+			self.modded_structure_tip = CTkToolTip(self.modded_structureWillGenerate,"server.properties setting:'generate-structures'")
+			self.modded_npcSpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-npcs'))
+			self.modded_NPCspawning = CTkCheckBox(self.modded_WorldSettingsBools,text="Spawn NPCs",variable=self.modded_npcSpawning,onvalue=True,offvalue=False)
+			self.modded_NPCspawning.grid(row=5,column=1,sticky=W,padx=3)
+			self.modded_npcSpawning_tip = CTkToolTip(self.modded_NPCspawning,"server.properties setting: 'spawn-npcs'")
+			self.modded_animalSpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-animals'))
+			self.modded_Animalspawning = CTkCheckBox(self.modded_WorldSettingsBools,text="Spawn Animals",variable=self.modded_animalSpawning,onvalue=True,offvalue=False)
+			self.modded_Animalspawning.grid(row=6,column=1,sticky=W,padx=3)
+			self.modded_animalspawning_tip = CTkToolTip(self.modded_Animalspawning,"server.properties setting: 'spawn-animals'")
+			self.modded_enemySpawning = BooleanVar(value=MinecraftServerProperties.get('spawn-monsters'))
+			self.modded_Enemyspawning = CTkCheckBox(self.modded_WorldSettingsBools,text="Spawn Enemies",variable=self.modded_enemySpawning,onvalue=True,offvalue=False)
+			self.modded_Enemyspawning.grid(row=7,column=1,sticky=W,padx=3)
+			self.modded_enemyspawning_tip = CTkToolTip(self.modded_Enemyspawning,"server.properties setting: 'spawn-monsters'")
+			self.modded_broadcastConsoleBool = BooleanVar(value=MinecraftServerProperties.get('broadcast-console-to-ops'))
+			self.modded_broadcastConsole = CTkCheckBox(self.modded_WorldSettingsBools,text="Broadcast System Console",variable=self.modded_broadcastConsoleBool,onvalue=True,offvalue=False)
+			self.modded_broadcastConsole.grid(row=7,column=0,sticky=W,padx=3)
+			self.modded_broadcastconsole_tip = CTkToolTip(self.modded_broadcastConsole,"server.properties setting: 'broadcast-console-to-ops'")
+			#Network & Security Tab
+			self.modded_NetworkSecurityTab = CTkScrollableFrame(self.moddedserverPropertiesFrame_tabs.tab("Network & Security"))
+			self.modded_NetworkSecurityTab.pack(fill=BOTH,expand=True,anchor=W)
+			self.modded_MinecraftServerIPStringVar = StringVar(value=MinecraftServerProperties.get('server-ip'))
+			self.modded_IPAddressLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Server IP: ")
+			self.modded_IPAddressLabel.grid(row=0,column=0,sticky=E)
+			self.modded_IPAddressEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_MinecraftServerIPStringVar)
+			self.modded_IPAddressEntry.grid(row=0,column=1,sticky=W)
+			self.modded_IPAddress_tip = CTkToolTip(self.modded_IPAddressLabel,"server.properties setting: 'server-ip'")
+			self.modded_NetworkCompressionIntVar = IntVar(value=MinecraftServerProperties.get('network-compression-threshold'))
+			self.modded_networkcompressionLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Network Compression: ")
+			self.modded_networkcompressionLabel.grid(row=1,column=0,sticky=E)
+			self.modded_networkCompressionEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_NetworkCompressionIntVar)
+			self.modded_networkCompressionEntry.grid(row=1,column=1,sticky=W)
+			self.modded_networkCompression_tip = CTkToolTip(self.modded_networkcompressionLabel,"server.properties setting: 'network-compression-threshold'")
+			self.modded_ticktimeIntVar = IntVar(value=MinecraftServerProperties.get('max-tick-time'))
+			self.modded_ticktimeLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Max Tick Rate: ")
+			self.modded_ticktimeLabel.grid(row=2,column=0,sticky=E)
+			self.modded_ticktimeEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_ticktimeIntVar)
+			self.modded_ticktimeEntry.grid(row=2,column=1,sticky=W)
+			self.modded_ticktime_tip = CTkToolTip(self.modded_ticktimeLabel,"server.properties setting: 'max-tick-time'")
+			self.modded_maxplayersIntVar = IntVar(value=MinecraftServerProperties.get('max-players'))
+			self.modded_maxplayersLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Max Players: ")
+			self.modded_maxplayersLabel.grid(row=3,column=0,sticky=E)
+			self.modded_maxplayersEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_maxplayersIntVar)
+			self.modded_maxplayersEntry.grid(row=3,column=1,sticky=W)
+			self.modded_maxplayers_tip = CTkToolTip(self.modded_maxplayersLabel,"server.properties setting: 'max-players'")
+			self.modded_serverportIntVar = IntVar(value=MinecraftServerProperties.get('server-port'))
+			self.modded_serverportLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Server Port: ")
+			self.modded_serverportLabel.grid(row=4,column=0,sticky=E)
+			self.modded_serverportEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_serverportIntVar)
+			self.modded_serverportEntry.grid(row=4,column=1,sticky=W)
+			self.modded_serverport_tip = CTkToolTip(self.modded_serverportLabel,"server.properties setting: 'server-port'")
+			self.modded_opPermissionlvlList = ["0","1","2","3","4"]
+			self.modded_opPermissionlvlIntVar = IntVar(value=MinecraftServerProperties.get('op-permission-level'))
+			self.modded_opPermissionlvlLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Op Permission Level: ")
+			self.modded_opPermissionlvlLabel.grid(row=5,column=0,sticky=E)
+			self.modded_opPermissionlvlComboBox = CTkComboBox(self.modded_NetworkSecurityTab,values=self.modded_opPermissionlvlList,variable=self.modded_opPermissionlvlIntVar)
+			self.modded_opPermissionlvlComboBox.grid(row=5,column=1,sticky=W)
+			self.modded_opPermissionlvl_tip = CTkToolTip(self.modded_opPermissionlvlLabel,"server.properties setting: 'op-permission-level'")
+			self.modded_entitybroadcastRangeList = [str(i) for i in range(10,1000)] #Best way of generating numbers from its set range
+			self.modded_entitybroadcastRangeIntVar = IntVar(value=MinecraftServerProperties.get('entity-broadcast-range-percentage'))
+			self.modded_entitybroadcastRangeLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Entity Broadcasting: ")
+			self.modded_entitybroadcastRangeLabel.grid(row=6,column=0,sticky=E)
+			self.modded_entitybroadcastRangeCombobox = CTkComboBox(self.modded_NetworkSecurityTab,values=self.modded_entitybroadcastRangeList,variable=self.modded_entitybroadcastRangeIntVar)
+			self.modded_entitybroadcastRangeCombobox.grid(row=6,column=1,sticky=W)
+			self.modded_entitybroadcastRange_tip = CTkToolTip(self.modded_entitybroadcastRangeLabel,"server.properties setting: 'entity-broadcast-range-percentage")
+			self.modded_playertimeoutIntVar = IntVar(value=MinecraftServerProperties.get('player-idle-timeout'))
+			self.modded_playertimeoutLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Idle Player Timeout: ")
+			self.modded_playertimeoutLabel.grid(row=7,column=0,sticky=E)
+			self.modded_playertimeoutEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_playercountIntVar)
+			self.modded_playertimeoutEntry.grid(row=7,column=1,sticky=W)
+			self.modded_playertimeout_tip = CTkToolTip(self.modded_playertimeoutLabel,"server.properties setting: 'player-idle-timeout'")
+			self.modded_ratelimitIntvar = IntVar(value=MinecraftServerProperties.get('rate-limit'))
+			self.modded_ratelimitLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Rate Limit: ")
+			self.modded_ratelimitLabel.grid(row=8,column=0,sticky=E)
+			self.modded_ratelimitEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_ratelimitIntvar)
+			self.modded_ratelimitEntry.grid(row=8,column=1,sticky=W)
+			self.modded_ratelimit_tip = CTkToolTip(self.modded_ratelimitLabel,"server.properties setting: 'rate-limit'")
+			self.modded_functionPermissionlvlList = [str(x) for x in range(1,4)]
+			self.modded_functionPermissionlvlIntvar = IntVar(value=MinecraftServerProperties.get('function-permission-level'))
+			self.modded_functionPermissionlvlLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Fuction Permission Level: ")
+			self.modded_functionPermissionlvlLabel.grid(row=9,column=0,sticky=E)
+			self.modded_functionPermissionlvlComboBox = CTkComboBox(self.modded_NetworkSecurityTab,values=self.modded_functionPermissionlvlList,variable=self.modded_functionPermissionlvlIntvar)
+			self.modded_functionPermissionlvlComboBox.grid(row=9,column=1,sticky=W)
+			self.modded_functionPermissionlvl_tip = CTkToolTip(self.vanilla_functionPermissionlvlLabel,"server.properties setting: 'function-permission-level'")
+			self.modded_rconPasswordStringVar = StringVar(value=MinecraftServerProperties.get('rcon.password'))
+			self.modded_rconPasswordLabel = CTkLabel(self.modded_NetworkSecurityTab,text="RCON Password: ")
+			self.modded_rconPasswordLabel.grid(row=10,column=0,sticky=E)
+			self.modded_rconPasswordEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_rconPasswordStringVar)
+			self.modded_rconPasswordEntry.grid(row=10,column=1,sticky=W)
+			self.modded_rconPassword_tip = CTkToolTip(self.modded_rconPasswordLabel,"server.properties setting: 'rcon.password'")
+			self.modded_rconportIntVar = IntVar(value=MinecraftServerProperties.get('rcon.port'))
+			self.modded_rconportLabel = CTkLabel(self.modded_NetworkSecurityTab,text="RCON Port: ")
+			self.modded_rconportLabel.grid(row=11,column=0,sticky=E)
+			self.modded_rconportEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_rconportIntVar)
+			self.modded_rconportEntry.grid(row=11,column=1,sticky=W)
+			self.modded_rconport_tip = CTkToolTip(self.modded_rconportLabel,"server.properties setting: 'rcon.port'")
+			self.modded_queryportIntVar = IntVar(value=MinecraftServerProperties.get('query.port'))
+			self.modded_queryportLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Query Port: ")
+			self.modded_queryportLabel.grid(row=12,column=0,sticky=E)
+			self.modded_queryportEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_queryportIntVar)
+			self.modded_queryportEntry.grid(row=12,column=1,sticky=W)
+			self.modded_queryport_tip = CTkToolTip(self.modded_queryportLabel,"server.properties setting: 'query.port'")
+			self.modded_bugreportingStringVar = StringVar(value=MinecraftServerProperties.get('bug-report-link'))
+			self.modded_bugreportingLabel = CTkLabel(self.modded_NetworkSecurityTab,text="Bug Report Link: ")
+			self.modded_bugreportingLabel.grid(row=13,column=0,sticky=E)
+			self.modded_bugreportingEntry = CTkEntry(self.modded_NetworkSecurityTab,textvariable=self.modded_bugreportingStringVar)
+			self.modded_bugreportingEntry.grid(row=13,column=1,sticky=W)
+			self.modded_bugreporting_tip = CTkToolTip(self.modded_bugreportingLabel,"server.properties setting: 'bug-report-link'")
+			#Networking Tab Bools
+			self.modded_NetworkSecurityTabBools = CTkFrame(self.modded_NetworkSecurityTab)
+			self.modded_NetworkSecurityTabBools.grid(row=13,column=0,columnspan=2,sticky=E)
+			self.modded_togglequery = BooleanVar(value=MinecraftServerProperties.get('enable-query'))
+			self.modded_canQueryCheck = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Enable Query",variable=self.modded_togglequery,onvalue=True,offvalue=False)
+			self.modded_canQueryCheck.grid(row=0,column=1,padx=3,pady=3,sticky=W)
+			self.modded_canquery_tip = CTkToolTip(self.modded_canQueryCheck,"server.properties setting: 'enable-query'")
+			self.modded_chunkwriteSyncingBool = BooleanVar(value=MinecraftServerProperties.get('sync-chunk-writes'))
+			self.modded_chunkwriteSyncingCheck = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Synchronized Chunk Writing",variable=self.modded_chunkwriteSyncingBool,onvalue=True,offvalue=False)
+			self.modded_chunkwriteSyncingCheck.grid(row=1,column=0,padx=3,pady=3,sticky=W)
+			self.modded_chunkwriteSyncing_tip = CTkToolTip(self.modded_chunkwriteSyncingCheck,"server.properties setting: 'sync-chunk-writes'")
+			self.modded_proxyBlockingBool = BooleanVar(value=MinecraftServerProperties.get('prevent-proxy-connections'))
+			self.modded_proxyBlockingCheck = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Block Proxy Connections",variable=self.modded_proxyBlockingBool,onvalue=True,offvalue=False)
+			self.modded_proxyBlockingCheck.grid(row=0,column=0,padx=3,pady=3,sticky=W)
+			self.modded_proxyblocking_tip = CTkToolTip(self.modded_proxyBlockingCheck,"server.properties setting: 'prevent-proxy-connections'")
+			self.modded_toggleOnlineMode = BooleanVar(value=MinecraftServerProperties.get('online-mode'))
+			self.modded_isOnline = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Online Mode",variable=self.modded_toggleOnlineMode,onvalue=True,offvalue=False)
+			self.modded_isOnline.grid(row=1,column=1,sticky=W,padx=3,pady=3)
+			self.modded_isonline_tip = CTkToolTip(self.modded_isOnline,"server.properties setting: 'online-mode'")
+			self.modded_jmxMonitoringBool = BooleanVar(value=MinecraftServerProperties.get('enable-jmx-monitoring'))
+			self.modded_jmxMonitoringCheck = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Toggle JMX Monitoring",variable=self.modded_jmxMonitoringBool,onvalue=True,offvalue=False)
+			self.modded_jmxMonitoringCheck.grid(row=2,column=0,sticky=W,pady=3,padx=3)
+			self.modded_jmxMonitoring_tip = CTkToolTip(self.modded_jmxMonitoringCheck,"server.properties setting: 'enable-jmx-monitoring'")
+			self.modded_isIPLogging = BooleanVar(value=MinecraftServerProperties.get('log-ips'))
+			self.modded_IPLogBool = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Log IPs",onvalue=True,offvalue=False,variable=self.modded_isIPLogging)
+			self.modded_IPLogBool.grid(row=2,column=1,padx=3,pady=3,sticky=W)
+			self.modded_togglerconBool = BooleanVar(value=MinecraftServerProperties.get('enable-rcon'))
+			self.modded_rconToggler = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Enable RCON",variable=self.modded_togglerconBool,onvalue=True,offvalue=False)
+			self.modded_rconToggler.grid(row=3,column=1,padx=3,pady=3,sticky=W)
+			self.modded_broadcastrconBool = BooleanVar(value=MinecraftServerProperties.get('broadcast-rcon-to-ops'))
+			self.modded_rconBroadcast = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Broadcast RCON",variable=self.modded_broadcastrconBool,onvalue=True,offvalue=False)
+			self.modded_rconBroadcast.grid(row=3,column=0,sticky=W,padx=3,pady=3)
+			self.modded_acceptTransfersBool = BooleanVar(value=MinecraftServerProperties.get('accept-transfers'))
+			self.modded_acceptTransfers = CTkCheckBox(self.modded_NetworkSecurityTabBools,text="Accept Transfers from Another Server",variable=self.modded_acceptTransfersBool,onvalue=True,offvalue=False)
+			self.modded_acceptTransfers.grid(row=4,column=0,padx=3,pady=3,sticky=W)
+			self.populateInstanceView(self.moddedinstanceView,"",self.modpacksFolder,"downloads")
+
+			self.closebtn = CTkButton(self.root,text="Close",command=lambda:self.root.destroy())
+			self.closebtn.grid(row=1,column=0,sticky=E,pady=10)
+
+		except Exception as e:
+			JSONModel.rollbackModel()
+			raise MCSCInternalError("An exception was raised in tkinter somehow. Heres a walkthrough...", errors=e)
+
+	def onMainWindow_setWindowTabScale(self):
+		#We need to know what tabs are selected
+		currentRootTab = self.rootTabs.get()
+		if currentRootTab == "Vanilla Server Instances":
+			#Theres another tab view here
+			rootTab_currentVanillaInstanceTab = self.creationTabsvanilla.get()
+			if rootTab_currentVanillaInstanceTab == "Create Instance":
+				#Change the window size so everything is in view
+				self.root.geometry("900x675")
+				return
+			else:
+				if rootTab_currentVanillaInstanceTab == "Instance Server Properties":
+					self.root.geometry("1030x700")
+					return
+		else:
+			if currentRootTab == "Modded Server Instances":
+				#Theres another tab view here
+				rootTab_currentModdedInstanceTab = self.creationTabsmodded.get()
+				if rootTab_currentModdedInstanceTab == "Create Instance":
+					self.root.geometry("900x750")
+					return
+				else:
+					if rootTab_currentModdedInstanceTab == "Curseforge Modpacks":
+						self.root.geometry("820x715")
+						return
 	
 	def setMCVersions(self,event):
 		#We need to know what server type is selected
@@ -3652,7 +4386,30 @@ class NewInstanceWindowClass():
 				Directory = treeview.insert(parent, END, text=item, values=("Instance"))
 			else:
 				pass
-	
+
+	def onSearchModpack(self):
+		#We need to search for the modpack
+		searchquery = self.searchBar.get()
+		resultsDict = ModpackIndexClass.searchModpack(modpackName=str(searchquery))
+		results = []
+		totalResults = 0
+		for result in resultsDict:
+			totalResults += 1
+			name = result['name']
+			results.append(name)
+			continue
+		#We have a list of the results! Add it to the listbox
+		#We need to clear it first
+		self.searchQueryList.delete(0,END)
+		if totalResults == 0:
+			self.searchQueryList.insert(END, "No Modpacks found on Curseforge")
+			return
+		else:
+			for item in results:
+				self.searchQueryList.insert(END,item)
+			return
+
+
 	def createVanillaInstance(self,name,minecraftversion=None,servertype=None,serverDirectory=None):
 		global ConsoleWindow
 		MCSCDatabase = sqlite3.connect("mcsc_data.db")
@@ -3725,24 +4482,58 @@ class NewInstanceWindowClass():
 			ConsoleWindow.displayException(e)
 			MCSC_Cursor.close()
 			return
-	def attachInstance(self,widget=None):
+	def attachInstance(self, widget=None):
 		global launchServerBtn
 		self.Widget = widget
-		if self.Widget == None:
+		if self.Widget is None:
 			raise MCSCInternalError("Widget parameter was a NoneType value")
+		
 		selecteditemdata = self.Widget.focus()
 		selecteditem = self.Widget.item(selecteditemdata).get('text')
 		if selecteditem:
-			#We can load the properties from the json
+			# We can load the properties from the JSON model using getJSONInstanceDatabyName
 			instanceName = str(selecteditem)
-			ServerFileIO.loadJSONProperties(instanceName=str(instanceName))
-			ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName))
 			print(f"[Minerva Server Crafter]: Instance Attached Successfully.")
-			MCSC_Framework.onMainWindow_setTabState(self.creationTabsvanilla,"Instance Server Properties","normal")
-			MCSC_Framework.onMainWindow_setTabState(root_tabs,"Whitelisting","normal")
-			MCSC_Framework.onMainWindow_setTabState(root_tabs,"Banned Players","normal")
+			# Retrieve the instance data using the getJSONInstanceDatabyName function
+			instanceData_raw = ServerFileIO.getJSONInstanceDatabyName(instanceName=instanceName)
+			instanceData = instanceData_raw[1]
+			if not instanceData:
+				print(f"[Minerva Server Crafter]: Instance '{instanceName}' not found in the JSON model.")
+				return
+	
+			# Determine if the instance is Vanilla or Modded based on the retrieved data
+			instanceType = instanceData_raw[0]
+			moddedBool = False
+			if instanceType == "Modded":
+				moddedBool = True
+			currentTab = self.rootTabs.get()
+	
+			if moddedBool == False and currentTab == "Vanilla Server Instances":
+				os.chdir(str(rootFilepath) + f"/base/sandbox/Instances/{instanceName}")
+				MCSC_Framework.onMainWindow_setTabState(self.creationTabsvanilla, "Instance Server Properties", "normal")
+				MCSC_Framework.onMainWindow_setTabState(self.creationTabsmodded, "Instance Server Properties", "disabled")
+				#We need to prevent navigation away from the tab in self.root
+				MCSC_Framework.onMainWindow_setTabState(self.rootTabs,"Modded Server Instances","disabled")
+			else:
+				if moddedBool == True and currentTab == "Modded Server Instances":
+					os.chdir(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{instanceName}")
+					MCSC_Framework.onMainWindow_setTabState(self.creationTabsmodded, "Instance Server Properties", "normal")
+					MCSC_Framework.onMainWindow_setTabState(self.creationTabsvanilla, "Instance Server Properties", "disabled")
+					MCSC_Framework.onMainWindow_setTabState(self.rootTabs,"Vanilla Server Instances","disabled")
+				else:
+					print(f"[Minerva Server Crafter]: Mismatch between instance type and current tab. Please check the tab or instance selection.")
+					return
+	
+			# Update the GUI states
+			MCSC_Framework.onMainWindow_setTabState(root_tabs, "Whitelisting", "normal")
+			MCSC_Framework.onMainWindow_setTabState(root_tabs, "Banned Players", "normal")
+			#Set the category
+			category = "Vanilla" if not moddedBool else "Modded"
+			ServerFileIO.loadJSONProperties(instanceName=str(instanceName), category=category)
+			ServerFileIO.onExit_setInstancePointer(instanceName=str(instanceName), category=category)
 			launchServerBtn.configure(state="normal")
-			return
+
+
 
 	def displayInstanceDetails(self,event):
 		# We need to get what's selected in the treeview
@@ -3884,7 +4675,9 @@ class NewInstanceWindowClass():
 						else:
 							continue
 				del expectedProperties['debug']
-				ServerFileIO.exportPropertiestoJSON(instanceName=str(instanceName),alternativeDict=expectedProperties)
+				lastconfig = ServerFileIO.getLastConfigData()
+				category = lastconfig['category']
+				ServerFileIO.exportPropertiestoJSON(instanceName=str(instanceName),category=str(category),alternativeDict=expectedProperties)
 				print("[Minerva Server Crafter]: Properties Data Porting Done. :D")
 				return
 					
@@ -4018,52 +4811,22 @@ class NewInstanceWindowClass():
 			ConsoleWindow.displayException(e)
 			MCSC_Cursor.close()
 			return
-	def onModpackLoad_LoadModpack(self):
-		#We need ask for the filepath of the zipfile
-		target_modpackZipfile = filedialog.askopenfile(parent=self.root,filetypes=[("Curseforge Modpack(*.zip)","*.zip")],defaultextension=".zip",initialdir=str(rootFilepath),title="Select Curseforge Modpack ZIP")
-		if target_modpackZipfile == None:
-			return
-		else:
-			#This technically opens the file. We just need the filepath of the zip. So we can just close it programmibly
-			modpackPath = target_modpackZipfile.name
-			target_modpackZipfile.flush()
-			target_modpackZipfile.close()
-			if target_modpackZipfile.closed == True:
-				#We can load the modpack
-				modpackLoading = CurseforgeClass.loadModpack(filepath=str(modpackPath))
-				if modpackLoading == 200:
-					#Modpack has been sideloaded. We need the name of the modpack
-					modpackName = os.path.basename(str(modpackPath))
-					modpackName = os.path.splitext(modpackName)
-					modpackName = modpackName[0]
-					Modpack_Data = {}
-					for k1,v1 in Modpack_Data.items():
-						for k2,v2 in modpackData.items():
-							k1 = k2
-							v1 = v2
-							Modpack_Data[str(k1)] = str(v1)
-					print(Modpack_Data.items())
-					os.chdir(str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{modpackName}")
-					#We need to do the first run
-					def printLines(process):
-						for line in process.stdout:
-							print(line)
-							time.sleep(0.1)
-						returnCode = process.wait()
-						print(f"Command exited with the return code {returnCode}")
-						return
-					firstruncmd = ['java', '@user_jvm_args.txt', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/win_args.txt','nogui','%*']
-					firstRunProcess = subprocess.Popen(firstruncmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,shell=True,text=True)
-					firstRunThread = threading.Thread(target=printLines,args=(firstRunProcess,),name="Server First Run")
-					firstRunThread.start()
-					returnCode = firstRunProcess.wait()
-					firstRunThread.join()
-					if returnCode == 0:
-						#We can load the properties now
-						self.createmoddedInstance()
 
-						self.populateInstanceView(self.moddedinstanceView,"",self.modpacksFolder,"downloads")
-					return
+	def buttonActionModded_onSubmitModpack(self):
+		'Executes when the import selected modpack is clicked'
+		os.chdir(str(rootFilepath))
+		#We need to get what was selected from the listbox
+		currentSelectedModpack = self.searchQueryList.get()
+		#We need to turn the name into an ID
+		CurseforgeClass.loadModpack(filepath=None,modpackName=str(currentSelectedModpack))
+		#Refresh the modded instance view
+		self.moddedinstanceView.delete(0,END)
+		self.populateInstanceView(self.moddedinstanceView,"",self.modpacksFolder,"downloads")
+		#Navigate to the modpack instance
+		selectedPackPath = str(rootFilepath) + f"/base/sandbox/Instances/Modpacks/{currentSelectedModpack}"
+		os.chdir(str(selectedPackPath))
+		return
+
 	def buttonActionModded_onClickSubmit(self):
 		#Get all of the data that was put in
 		name = self.create_vanillainstance_instanceNameEntry.get()
@@ -4087,20 +4850,22 @@ class ConsoleShell(CTkFrame):
 		process2 = None
 		outputThread = None
 		self.pauseEvent = threading.Event()
+		self.lastConsoleUpdate = tuple()
 
-		self.root = CTkCanvas(self.parent)
+		self.root = CTkFrame(self.parent,bg_color="transparent",fg_color="gray")
 		self.root.grid(row=0,column=0,sticky="nsew")
-		self.ConsoleCanvas = CTkCanvas(self.root)
-		self.ConsoleCanvas.grid(row=0,column=0,sticky="nsew")
-		self.ConsoleOut = CTkTextbox(self.ConsoleCanvas, width=400, corner_radius=0,state="disabled",bg_color="black")
+		self.ConsoleCanvas = CTkFrame(self.root,bg_color="transparent")
+		self.ConsoleCanvas.grid(row=0,column=0,sticky="nsew",padx=3,pady=3)
+		self.ConsoleOut = CTkTextbox(self.ConsoleCanvas,width=400,state="disabled",bg_color="gray")
 		self.ConsoleOut.pack(fill=BOTH,expand=True,anchor="center")
 		self.ConsoleOut.tag_config("stderr",foreground="#b22222")
-		self.InputCanvas = CTkCanvas(self.root)
-		self.InputCanvas.grid(row=1,column=0,sticky="nsew")
-		self.ConsoleIn = CTkEntry(self.InputCanvas,placeholder_text="Input a command",bg_color="black")
+		self.InputCanvas = CTkFrame(self.root,bg_color="transparent")
+		self.InputCanvas.grid(row=1,column=0,sticky="nsew",pady=3,padx=3)
+		self.ConsoleIn = CTkEntry(self.InputCanvas,placeholder_text="Input a command",bg_color="gray")
 		self.ConsoleIn.pack(fill=X,ipadx=200,side=LEFT)
-		self.SendBtn = CTkButton(self.InputCanvas,text="Send",bg_color="black",command=lambda:self.ServerProcess_OnTransmitInput())
+		self.SendBtn = CTkButton(self.InputCanvas,text="Send",bg_color="gray",command=lambda:self.ServerProcess_OnTransmitInput())
 		self.SendBtn.pack(side=RIGHT)
+		self.SendBtn.bind("<Return>",self.ServerProcess_OnTransmitInput)
 		self.root.rowconfigure(0,weight=1)
 		self.root.rowconfigure(1,weight=2)
 		self.root.columnconfigure(0,weight=1)
@@ -4134,6 +4899,7 @@ class ConsoleShell(CTkFrame):
 
 	def updateConsole(self,index,string):
 		'updateConsole(index,string) -> Console Output \n \n Prints the given string to the ConsoleShell'
+		self.currentIndex = self.ConsoleOut.index(index)
 		self.ConsoleOut.configure(state="normal")
 		self.ConsoleOut.insert(index,str(string) + '\n')
 		self.ConsoleOut.configure(state="disabled")
@@ -4143,174 +4909,146 @@ class ConsoleShell(CTkFrame):
 	def ServerProcess_OnTransmitInput(self):
 		'ServerProcess_OnTransmitInput() -> Server Input \n \nPasses input to stdin of the Minecraft Server on its own Thread. \nIf the server isn\'t running, nothing is sent to the subprocess.'
 		def SendInput():
-			serverRunning = outputThread.is_alive()
-			if process2.returncode is None and serverRunning == True:
-				inputQuery = str(self.ConsoleIn.get())
-				self.updateConsole(END, "[Minerva Server Crafter]: <User-Input>: " + str(inputQuery))
-				process2.stdin.write(str(inputQuery))
-				process2.stdin.write('\n')  # Add a newline character to simulate pressing Enter
-				process2.stdin.flush()
-				self.ConsoleIn.delete(0,END)
-				for line in process2.stdout:
-					self.updateConsole(END, "[Minerva Server Crafter]: <Server-IO>: " + line.strip())
+			try:
+				if 'outputThread' in globals():
+					serverRunning = outputThread.is_alive()
+					if process2.returncode is None and serverRunning == True:
+						inputQuery = str(self.ConsoleIn.get())
+						self.updateConsole(END, "[Minecraft Server Crafter]: <User-Input>: " + str(inputQuery))
+						process2.stdin.write(str(inputQuery))
+						process2.stdin.write('\n')  # Add a newline character to simulate pressing Enter
+						process2.stdin.flush()
+						self.ConsoleIn.delete(0,END)
+						for line in process2.stdout:
+							self.updateConsole(END, "[Minecraft Server Crafter]: <Server-IO>: " + line.strip())
+							break
+						return
 
-			else:
-				self.updateConsole(END, '[Minerva Server Crafter]: Server is not running. Will not proceed')
-				self.ConsoleIn.delete(0, END)
+				else:
+					self.updateConsole(END, '[Minecraft Server Crafter]: Server is not running. Will not proceed')
+					self.ConsoleIn.delete(0, END)
+					return
+			except Exception as e:
+				print(f"[Minerva Server Crafter]: Error while sending input: {str(e)}")
+				self.ConsoleIn.delete(0,END)
 				return
 
 		global process2
 		global outputThread
 
 		try:
-			inputThread = threading.Thread(target=SendInput)
+			inputThread = threading.Thread(target=SendInput,name="Minecraft Server Input Processing",daemon=True)
 			inputThread.start()
+			return
 		except SystemExit:
 			inputThread.join()
+			return
 	
-	def beginServerProcess(self, instanceName=None, memoryAllocation=False, initialMemory=0, maxMemory=0, isForge=False):
-		'Begins the Minecraft Server. If memoryAllocation is True, then memory allocation(measured in MB) for the Java VM is included in building the java command, otherwise its exempted. \n The initialMemory parameter sets the minimum memory, and the maxMemory sets the maxium memory. \n The isForge parameter tells whether or not if the server is a forge server. This is must return true due to how forge is programmed internally.'
-	
+	def beginServerProcess(self, instanceName=None, memoryAllocation=False, initialMemory=0, maxMemory=0):
+		'''
+		Begins the Minecraft Server. If memoryAllocation is True, then memory allocation (measured in MB or GB) 
+		for the Java VM is included in building the java command, otherwise it's exempted.
+		The initialMemory parameter sets the minimum memory, and the maxMemory sets the maximum memory.
+		'''
+		
 		def print_output(process):
-			for line in process2.stdout:
-				self.updateConsole(END,"[Minerva Server Crafter]: <Server-IO>: " + line.strip())
+			for line in process.stdout:
+				self.updateConsole("end", "[Minerva Server Crafter]: <Server-IO>: " + line.strip())
 				time.sleep(0.1)
 			returnCode = process.wait()
-			self.updateConsole(END,"[Minerva Server Crafter]: Command exited with the return code " + str(returnCode))
+			self.updateConsole("end", "[Minerva Server Crafter]: Command exited with the return code " + str(returnCode))
+			return
 
 		global root_tabs
 		global rootFilepath
 		global process2
 		global outputThread
-		global MemoryAllocationCap
-		global attachedInstance
+		global MCSCWatchdog_Playerlist
 
 		root_tabs.set("Console Shell")
 		self.killEvent = False
-		#We need to do some magic
-		instancesDirectory = os.path.join(str(rootFilepath),"/base/sandbox/Instances")
-		#Get the instance details
-		with open(str(rootFilepath) + "/properties.json","r") as jsonFile:
-			datadump = json.load(jsonFile)
-			#We need to know if its using the legacy behavior
-			instances = datadump["Instances"]
-			for category in ["Vanilla","Modded"]:
-				for instance in instances[category]:
-					isLegacy = instance[instanceName]["legacy-launch"]["forceToDirectory"]
-					serverdirectory = instance[instanceName]["legacy-launch"]["serverDirectory"]
-			jsonFile.close()
 
-		if isForge == True:
-			if isLegacy == True:
-				if memoryAllocation == True:
-					currentScaledMemory = str(InstalledMemory[1])
-					if currentScaledMemory == "GB":
-						if operatingSystem == "Windows":
-							os.chdir(str(serverdirectory))
-							cmd = ['java', f'-Xms{initialMemory}G', f'-Xmx{maxMemory}G', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/win_args.txt' , '-nogui', '%*']
-						else:
-							os.chdir(str(serverdirectory))
-							cmd = ['java', f'-Xms{initialMemory}G', f'-Xmx{maxMemory}G', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/unix_args.txt' , '-nogui', '$@']
-						#We need to scale the command so it measures the values in GB
-						#cmd = ['java', f'-Xms{initialMemory}G', f'-Xmx{maxMemory}G', '-jar', str(selectedJar), '-nogui']
-					if currentScaledMemory == "MB":
-						#We need to scale the command so it measures the values in MB
-						#cmd = ['java', f'-Xms{initialMemory}M', f'-Xmx{maxMemory}M', '-jar', str(selectedJar), '-nogui']
-						if operatingSystem == "Windows":
-							os.chdir(str(serverdirectory))
-							cmd = ['java', f'-Xms{initialMemory}M', f'-Xmx{maxMemory}M', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/win_args.txt' , '-nogui', '%*']
-						else:
-							os.chdir(str(serverdirectory))
-							cmd = ['java', f'-Xms{initialMemory}M', f'-Xmx{maxMemory}M', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/unix_args.txt' , '-nogui', '$@']
-			if isLegacy == False:
-				selectedmoddedInstance = os.path.join(str(instancesDirectory),f"/Modpacks/{instanceName}")
-				#We need to get some instance information
-				if memoryAllocation == True:
-					currentScaledMemory = str(InstalledMemory[1])
-					if currentScaledMemory == "GB":
-						#We need to either point to the run.bat or the run.sh file depending on what the operating system is
-						if operatingSystem == "Windows":
-							os.chdir(str(selectedmoddedInstance))
-							cmd = ['java', f'-Xms{initialMemory}G', f'-Xmx{maxMemory}G', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/win_args.txt' , '-nogui', '%*']
-						else:
-							os.chdir(str(selectedmoddedInstance))
-							cmd = ['java', f'-Xms{initialMemory}G', f'-Xmx{maxMemory}G', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/unix_args.txt' , '-nogui', '$@']
-						#We need to scale the command so it measures the values in GB
-						#cmd = ['java', f'-Xms{initialMemory}G', f'-Xmx{maxMemory}G', '-jar', str(selectedJar), '-nogui']
-					if currentScaledMemory == "MB":
-						#We need to scale the command so it measures the values in MB
-						#cmd = ['java', f'-Xms{initialMemory}M', f'-Xmx{maxMemory}M', '-jar', str(selectedJar), '-nogui']
-						if operatingSystem == "Windows":
-							os.chdir(str(selectedmoddedInstance))
-							cmd = ['java', f'-Xms{initialMemory}M', f'-Xmx{maxMemory}M', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/win_args.txt' , '-nogui', '%*']
-						else:
-							os.chdir(str(selectedmoddedInstance))
-							cmd = ['java', f'-Xms{initialMemory}M', f'-Xmx{maxMemory}M', '@libraries/net/minecraftforge/forge/1.19.2-43.2.0/unix_args.txt' , '-nogui', '$@']
+		# Retrieve the instance data from the JSON model using getJSONInstanceDatabyName
+		instanceData = ServerFileIO.getJSONInstanceDatabyName(instanceName=instanceName)
+		if not instanceData:
+			print(f"[Minerva Server Crafter]: Instance '{instanceName}' not found in the JSON model.")
+			return
+
+		# Determine if the server is a modded server
+		instancetype = ServerFileIO.getInstanceCategorybyInstanceName(instanceName=instanceName)
+		isForge = instanceData.get("isForge", False)
+		isLegacy = instanceData.get("legacy-launch", {}).get("forceToDirectory", False)
+		serverDirectory = instanceData.get("legacy-launch", {}).get("serverDirectory", "")
+
+		# Determine the server path based on instance type and legacy status
+		if instancetype == "Modded":
+			serverPath = os.path.join(str(rootFilepath), "base/sandbox/Instances/Modpacks", instanceName)
 		else:
-			if isLegacy == True:
-				os.chdir(serverdirectory)
-				if memoryAllocation == True:
-					currentScaledMemory = str(InstalledMemory[1])
-					if currentScaledMemory == "GB":
-						cmd = ['java', f'-Xms{initialMemory}G', f'-Xmx{maxMemory}G', '-jar', 'server.jar', '-nogui']
-					if currentScaledMemory == "MB":
-						cmd = ['java', f'-Xms{initialMemory}M', f'-Xmx{maxMemory}M', '-jar', 'server.jar', '-nogui']
-				else:
-					cmd = ['java', '-jar', 'server.jar', '-nogui']
-			if isLegacy == False:
-				selectedvanillainstance = os.path.join(str(instancesDirectory),str(instanceName))
-				os.chdir(selectedvanillainstance)
-				if memoryAllocation == True:
-					currentScaledMemory = str(InstalledMemory[1])
-					if currentScaledMemory == "GB":
-						cmd = ['java', f'-Xms{initialMemory}G', f'-Xmx{maxMemory}G', '-jar', 'server.jar', '-nogui']
-					if currentScaledMemory == "MB":
-						cmd = ['java', f'-Xms{initialMemory}M', f'-Xmx{maxMemory}M', '-jar', 'server.jar', '-nogui']
-				else:
-					cmd = ['java', '-jar', 'server.jar', '-nogui']
-		self.updateConsole(END,"[Minerva Server Crafter]: Using java command: " + str(cmd))
+			serverPath = os.path.join(str(rootFilepath), "base/sandbox/Instances", instanceName)
+
+		if isLegacy:
+			serverPath = serverDirectory if serverDirectory else serverPath
+
+		# Navigate to the server directory
+		os.chdir(serverPath)
+
+		# Build the Java command based on memory allocation settings
+		cmd = ['java']
+		if memoryAllocation:
+			memoryUnit = 'G' if InstalledMemory[1] == "GB" else 'M'
+			cmd.extend([f'-Xms{initialMemory}{memoryUnit}', f'-Xmx{maxMemory}{memoryUnit}'])
+
+		if isForge:
+			# Use specific arguments for Forge servers
+			argFile = 'win_args.txt' if operatingSystem == "Windows" else 'unix_args.txt'
+			cmd.extend(['-XX:+UseG1GC','-XX:MaxGCPauseMillis=50',f'@libraries/net/minecraftforge/forge/1.19.2-43.2.0/{argFile}', '-nogui'])
+		else:
+			if instancetype == "Modded":
+				#We need to check what the modded instance is
+				modloaderData = instanceData['modloader']
+				modloadername = modloaderData['id']
+				if modloadername == "fabric":
+					#point to the fabric jar
+					cmd.extend(['-XX:+UseG1GC','-XX:MaxGCPauseMillis=50','-jar', 'fabric-server-launch.jar', '-nogui'])
+			else:
+				# Standard command for Vanilla servers
+				cmd.extend(['-XX:+UseG1GC','-XX:MaxGCPauseMillis=50','-jar', 'server.jar', '-nogui'])
+
+		# Update console output
+		self.updateConsole("end", "[Minerva Server Crafter]: Using java command: " + ' '.join(cmd))
 		time.sleep(0.1)
-		if isLegacy == True:
-			self.updateConsole(END,"[Minerva Server Crafter]: Enforcing Server Directory")
-		if isLegacy == False:
-			self.updateConsole(END, "[Minerva Server Crafter]: Ignoring Server Directory")
-		#Update the server.properties file
-		self.updateConsole(END,"[Minerva Server Crafter]: Pre-Server Startup Phase: Updating server.properties...")
+
+		# Display server launch details
+		self.updateConsole("end", f"[Minerva Server Crafter]: {'Enforcing' if isLegacy else 'Ignoring'} Server Directory")
+		self.updateConsole("end", "[Minerva Server Crafter]: Pre-Server Startup Phase: Updating server.properties...")
 		time.sleep(5)
-		if isForge == True:
-			if isLegacy == True:
-				ServerFileIO.convertInstancePropertiestoPropertiesFile(instanceName=str(instanceName),filepath=str(serverdirectory),bypassSaveLocation=True)
-			if isLegacy == False:
-				ServerFileIO.convertInstancePropertiestoPropertiesFile(instanceName=str(instanceName),filepath=str(selectedmoddedInstance),bypassSaveLocation=True)
-		if isForge == False:
-			if isLegacy == True:
-				ServerFileIO.convertInstancePropertiestoPropertiesFile(instanceName=str(instanceName),filepath=str(serverdirectory),bypassSaveLocation=True)
-			if isLegacy == False:
-				ServerFileIO.convertInstancePropertiestoPropertiesFile(instanceName=str(instanceName),filepath=str(selectedvanillainstance),bypassSaveLocation=True)
-		#Update the JSON Bans
-		self.updateConsole(END,"[Minerva Server Crafter]: Pre-Server Startup Phase: Updating JSON Bans[1/2]...")
+
+		# Update server properties and configuration files
+		ServerFileIO.convertInstancePropertiestoPropertiesFile(instanceName=str(instanceName), filepath=serverPath, bypassSaveLocation=True)
+
+		# Update JSON bans and whitelist
+		self.updateConsole("end", "[Minerva Server Crafter]: Pre-Server Startup Phase: Updating JSON Bans...")
 		time.sleep(5)
-		ServerFileIO.exportplayerBansToJSON()
-		self.updateConsole(END,"[Minerva Server Crafter]: Pre-Server Startup Phase: Updating JSON Bans[2/2]...")
+		os.chdir(rootFilepath)
+		ServerFileIO.exportplayerBansToJSON(serverpath=serverPath)
+		ServerFileIO.exportIPBansToJSON(serverpath=serverPath)
+
+		self.updateConsole("end", "[Minerva Server Crafter]: Pre-Server Startup Phase: Update Whitelist...")
 		time.sleep(5)
-		ServerFileIO.exportIPBansToJSON()
-		#Update Whitelist
-		self.updateConsole(END,"[Minerva Server Crafter]: Pre-Server Startup Phase: Update Whitelist...")
-		time.sleep(5)
-		ServerFileIO.exportWhitelistfromDatabase()
-		# All done!
-		self.updateConsole(END,"[Minerva Server Crafter]: Starting Server...")
-		# Launch the server
+		ServerFileIO.exportWhitelistfromDatabase(serverdir=serverPath)
+
+		# All done, start the server!
+		os.chdir(serverPath)
+		self.updateConsole("end", "[Minerva Server Crafter]: Starting Server...")
 		try:
-			#Run the command
-			process2 = subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,stdin=subprocess.PIPE,text=True)
-			outputThread = threading.Thread(target=print_output,args=(process2,))
+			# Run the server command
+			process2 = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.PIPE, text=True)
+			outputThread = threading.Thread(target=print_output, args=(process2,), name="Minecraft Server Output")
 			outputThread.start()
 
 		except Exception as e:
-			# Handle exceptions
+			# Handle any exceptions during the server launch
 			self.displayException(e)
-		
 		
 class ResourcePackWindow():
 	def closeWindow(self): #original, I know xD
@@ -4498,18 +5236,46 @@ class MOTDWindow():
 		
 		return
 
+root = CTk()
+root.title("Minerva Server Crafter" + str(releaseVersion))
+root.protocol('WM_DELETE_WINDOW', MCSC_Framework.onMainWindow_onExit)
+root.resizable(False,False)
+
+#Check the Operating System for the main window icon
+if sys.platform.startswith("win32"):
+	root.iconbitmap(str(rootFilepath) + "/base/ui/minecraftservercrafter.ico")
+if sys.platform.startswith("linux"):
+	root.iconbitmap("@" + str(rootFilepath) + "/base/ui/minecraftservercrafter-icon.xbm")
+if sys.platform.startswith("darwin"):
+	#Unsure if this will work, will pay close attention to Mac Users
+	root.iconbitmap(str(rootFilepath) + "/base/ui/Mac_icon-minecraftservercrafter.icns")
+#We need to put in a tab view
+
+root_tabs = CTkTabview(root,width=250)
+root.rowconfigure(0,weight=1)
+root.columnconfigure(2,weight=1)
+root_tabs.grid(row=0,column=2,sticky="nsew")
+root_tabs.add("Console Shell")
+root_tabs.add("Whitelisting")
+root_tabs.add("Banned Players")
+root_tabs.add("Minerva Server Crafter Settings")
+
+#Statically let the appearance mode to Dark Mode
+set_appearance_mode("dark")
+
 #Console Shell Tab
 ConsoleFrame = CTkFrame(root_tabs.tab("Console Shell"))
 ConsoleWindow = ConsoleShell(ConsoleFrame)
-ConsoleFrame.grid(row=0,column=0,sticky="nsew")
+ConsoleFrame.grid(row=0,column=0)
 
+root_tabs.tab("Console Shell").grid_columnconfigure(1,weight=1)
 
 #Minerva Server Crafter Tab
 MinecraftServerCrafterTabFrame = CTkFrame(root_tabs.tab("Minerva Server Crafter Settings"))
 MinecraftServerCrafterTabFrame.pack(fill=BOTH,expand=True,anchor=W)
 InstanceSelectViewer = CTkButton(MinecraftServerCrafterTabFrame,text="View Instances",command=MCSC_Framework.onMainWindow_openInstanceSelect)
 InstanceSelectViewer.grid(row=0,column=0)
-launchServerBtn = CTkButton(MinecraftServerCrafterTabFrame,text="Launch Server",command=ConsoleWindow.beginServerProcess,state=DISABLED)
+launchServerBtn = CTkButton(MinecraftServerCrafterTabFrame,text="Launch Server",command=lambda:ConsoleWindow.beginServerProcess(instanceName=str(ServerFileIO.getLastConfig())),state=DISABLED)
 launchServerBtn.grid(row=1,column=0,pady=5)
 saveConsoleLogbtn = CTkButton(MinecraftServerCrafterTabFrame,text="Export Console Shell",command=lambda:ConsoleWindow.SaveConsoleToFile(1.0,END))
 saveConsoleLogbtn.grid(row=2,column=0,sticky=N)
@@ -4552,7 +5318,7 @@ def updateWidgets():
 		MemoryAllocationMiniumSlider.configure(state=DISABLED)
 		MemoryAllocationMaximumSlider.configure(state=DISABLED)
 		#Set the launch server button command
-		launchServerBtn.configure(command=ConsoleWindow.beginServerProcess)
+		launchServerBtn.configure(command=lambda:ConsoleWindow.beginServerProcess(instanceName=str(ServerFileIO.getLastConfig())))
 		return
 	if CheckboxIsTicked == True:
 		#Memory is getting allocated
@@ -4560,11 +5326,9 @@ def updateWidgets():
 		MemoryAllocationMiniumSlider.configure(state=NORMAL)
 		MemoryAllocationMaximumSlider.configure(state=NORMAL)
 		#Set the launch server button command
-		launchServerBtn.configure(command=lambda:ConsoleWindow.beginServerProcess(memoryAllocation=True,initialMemory=int(MinimumMemoryInt.get()),maxMemory=int(MaximumMemoryInt.get())))
+		launchServerBtn.configure(command=lambda:ConsoleWindow.beginServerProcess(instanceName=str(ServerFileIO.getLastConfig()),memoryAllocation=True,initialMemory=int(MinimumMemoryInt.get()),maxMemory=int(MaximumMemoryInt.get())))
 		return
 MemoryAllocation.configure(command=updateWidgets)
-
-#Players List
 
 #Whitelist Tab
 
@@ -4614,7 +5378,9 @@ pardonIPbtn.grid(row=3,column=0,sticky=W)
 
 
 shellVersion = "Version: " + str(VersionNumber) + "\n"
-lastConfig = ServerFileIO.getLastConfig()
+lastConfigData = ServerFileIO.getLastConfigData()
+lastConfigID = lastConfigData['id']
+lastConfigCategory = lastConfigData['category']
 
 MCSC_Framework.onMainWindow_setTabState(root_tabs,"Whitelisting","disabled")
 MCSC_Framework.onMainWindow_setTabState(root_tabs,"Banned Players","disabled")
@@ -4622,16 +5388,19 @@ MCSC_Framework.onMainWindow_setTabState(root_tabs,"Banned Players","disabled")
 ConsoleWindow.updateConsole(END,"Minerva Server Crafter Lite - Release Build \n" + str(shellVersion))
 ConsoleWindow.updateConsole(END,"To begin, go to Minerva Server Crafter Settings > Attach Server Jar \n")
 
-ServerFileIO.loadJSONProperties(instanceName=str(lastConfig))
+ServerFileIO.loadJSONProperties(instanceName=str(lastConfigID),category=str(lastConfigCategory))
 MCSCUpdater.runUpdates()
 
+
+#810x293
+#620x279
+
 #test workspace
-#test = CurseforgeClass.loadModpack(filepath=None,modpackName="FXNT Create")
-modlist = ['item1','item2','item3']
-modlist = tuple(modlist)
-test = ServerFileIO.addInstancetoJSON(name="test",serverType="fabric",isModded=True,modlist=modlist,modloaderversion="0.15.3",minecraftversion="1.20.2")
 
 if os.path.isfile(str(rootFilepath) + "/base/sandbox/build/BuildTools/BuildTools.jar") == False:
+	if os.path.isdir(str(rootFilepath) + "/base/sandbox/build") == False:
+		os.mkdir(str(rootFilepath) + "/base/sandbox/build")
+		os.mkdir(str(rootFilepath) + "/base/sandbox/build/BuildTools")
 	MCSCDatabase = sqlite3.connect("mcsc_data.db")
 	MCSC_Cursor = MCSCDatabase.cursor()
 	print("[Minerva Server Crafter API - SpigotBaseClass]: BuildTools is missing! Obtaining...")
@@ -4643,6 +5412,11 @@ if os.path.isfile(str(rootFilepath) + "/base/sandbox/build/BuildTools/BuildTools
 		MCSCUpdater.SpigotBaseClass.getBuildTools(url=str(latestBuild_url))
 		MCSC_Cursor.close()
 		MCSCDatabase.close()
+if os.path.isdir(str(rootFilepath) + "/base/sandbox/Instances") == False:
+	#Generate them
+	os.mkdir(str(rootFilepath) + "/base/sandbox/Instances")
+	os.mkdir(str(rootFilepath) + "/base/sandbox/Instances/Modpacks")
+	os.mkdir(str(rootFilepath) + "/base/sandbox/Instances/Modpacks/downloads")
 
 #Mainloop
 root.mainloop()
