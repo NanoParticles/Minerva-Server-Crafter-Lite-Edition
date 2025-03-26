@@ -28,7 +28,7 @@ If you are using any of the following antivirus software, Minerva Server Crafter
 - Skyhigh(SWG)
 - Trellix(FireEye)
 
-You will need to configure your antivirus software to tell it that Minecraft Server Crafter isn't what it is claiming to be
+You will need to configure your antivirus software for Minerva Server Crafter.
 
 For statistical data on the matter(regarding the virus score, and other information), refer to this data: https://www.virustotal.com/gui/file/f8ea222edf92222be6a5b6943fba994271bdfd221f4a14c3b7715ff9d295c3bb/detection
 
@@ -39,16 +39,16 @@ For statistical data on the matter(regarding the virus score, and other informat
 
 # Features
 
-Console Shell - The core component of Minecraft Server Crafter. This shows the input/output of the Minecraft Server, as well as what Minecraft Server Crafter outputs
+Console Shell - The core component of Minerva Server Crafter. This shows the input/output of the Minecraft Server, as well as what Minerva Server Crafter outputs
 
-Server Properties File detection - Any pre-existing server properties file that is detected by Minecraft Server Crafter in the given server directory is automatically imported to Minecraft Server Crafter
+Server Properties File detection - Any pre-existing server properties file that is detected by Minerva Server Crafter in the given server directory is automatically imported to Minerva Server Crafter
 
-Sqlite 3 Database - Minecraft Server Crafter also searches for the JSON files for whitelisting, and bans to add them to their respective tables. All changes is configured in Minecraft Server Crafter
+Sqlite 3 Database - Minerva Server Crafter also searches for the JSON files for whitelisting, and bans to add them to their respective tables. All changes is configured in Minerva Server Crafter
 
-Networking - This program automatically detects the Local IP address of the machine the program is on and sets it as the IP address by default for the Server IP, which can be changed within the program under Server Properties File > Networking.
+Networking - This program automatically detects the Local IP address of the machine the program is on and sets it as the IP address by default for the Server IP.
 
-Version Updater - Detects realtime version updates at boot for the given server types that Minecraft Server Crafter natively supports. When this is running, only official resources thats provided by the creators(when applicable) of the specific server type, including Minecraft Server Crafter - Lite Edition
+Version Updater - Detects realtime version updates at boot for the given server types that Minerva Server Crafter natively supports. When this is running, only official resources thats provided by the creators(when applicable) of the specific server type, including Minerva Server Crafter - Lite Edition
 
-Curseforge API Compatible - Minecraft Server Crafter - Lite Edition has the compatiblity to use Curseforges API. This is primarily used ONLY for server types that doesn't have an API for version updates, and modpack support. 
+Curseforge API Compatible - Minerva Server Crafter - Lite Edition has the compatiblity to use Curseforges API. This is primarily used ONLY for server types that doesn't have an API for version updates, and modpack support. 
 
-Sandbox-like Server Instances - Minecraft Server Crafter - Lite Edition generates the nessisary files to its own folder similarity to(but not exact) the Curseforge's Launcher. During this file generation, officially public resources/binaries(including server jars) is unmodified(as-is condition) by Minecraft Server Crafter - Lite Edition but only downloads into its instance folder. For custom instances that Minecraft Server Crafter - Lite Edition does not generate resources/binaries is provided by the user. For licensing, go into Minecraft Server Crafter > Licensing. This will show the license(s) for server types that Minecraft Server Crafter - Lite Edition only generates files for and other components that Minecraft Server Crafter - Lite Edition uses and acknowledges its creators.
+Sandbox-like Server Instances - Minerva Server Crafter - Lite Edition generates the nessisary files to its own folder similarity to(but not exact) the Curseforge's Launcher. During this file generation, officially public resources/binaries(including server jars) is unmodified(as-is condition) by Minerva Server Crafter - Lite Edition but only downloads into its instance folder. For custom instances that Minerva Server Crafter - Lite Edition does not generate resources/binaries and is provided by the user. For licensing, go to File > About. This will show the license(s) for server types that Minerva Server Crafter - Lite Edition only generates files for and other components that Minerva Server Crafter - Lite Edition uses and acknowledges its creators.
