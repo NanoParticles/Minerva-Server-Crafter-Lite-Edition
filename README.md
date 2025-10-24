@@ -1,4 +1,6 @@
 # Minerva Server Crafter - Lite Edition
+![alt text](https://github.com/NanoParticles/Minerva-Server-Crafter-Lite-Edition-Dev-Branch/blob/0512495d6820e4b96ebdd5b633e26cec24bc2bf3/MINERVA-SERVER-CRAFTER-10-24-2025.png?raw=true)
+
 Minerva Server Crafter - Lite Edition is a Lightweight GUI Console that allows the user to create, configure, and manage a Minecraft Server with the given server jar file.
 
 # Credits
@@ -49,6 +51,10 @@ Networking - This program automatically detects the Local IP address of the mach
 
 Version Updater - Detects realtime version updates at boot for the given server types that Minerva Server Crafter natively supports. When this is running, only official resources thats provided by the creators(when applicable) of the specific server type, including Minerva Server Crafter - Lite Edition
 
-Curseforge API Compatible - Minerva Server Crafter - Lite Edition has the compatiblity to use Curseforges API. This is primarily used ONLY for server types that doesn't have an API for version updates that curseforge can detect.
+Curseforge API Compatible - Minerva Server Crafter - Lite Edition has the compatiblity to use Curseforges API between Modpack lookups(handled by Modpack Index which is then in turn processed to the Curseforge API) to version checking.
+
+Curseforge Local and Public Modpacks Importing - Import your favorite Modpack directly from Curseforge to Minerva Server Crafter - Lite Edition. Whether its a public modpack or a custom one that was made within the curseforge application. Minerva Server Crafter - Lite Edition will see whatever local modpacks you made and will attempt to guess whats a client mod and server mod using human intervention before processing the import. 
 
 Sandbox-like Server Instances - Minerva Server Crafter - Lite Edition generates the nessisary files to its own folder similarity to(but not exact) the Curseforge's Launcher. During this file generation, officially public resources/binaries(including server jars) is unmodified(as-is condition) by Minerva Server Crafter - Lite Edition but only downloads into its instance folder. For custom instances that Minerva Server Crafter - Lite Edition does not generate resources/binaries and is provided by the user. For licensing, go to File > About. This will show the license(s) for server types that Minerva Server Crafter - Lite Edition only generates files for and other components that Minerva Server Crafter - Lite Edition uses and acknowledges its creators.
+
+Topographic/Isometric World Viewer - Minerva Server Crafter - Lite Edition now has a world viewer, out of the box using bluemaps. You can use this to select a singleplayer world, or a world thats in the server directory. See the world before jumping into the world in-game! For more information, visit the repository: https://github.com/BlueMap-Minecraft/BlueMap.
