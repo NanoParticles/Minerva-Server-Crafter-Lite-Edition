@@ -1,6 +1,103 @@
+#-------------------------------------------------------------------------------#
+#               Qodana analysis is configured by qodana.yaml file               #
+#             https://www.jetbrains.com/help/qodana/qodana-yaml.html            #
+#-------------------------------------------------------------------------------#
 version: "1.0"
-linter: jetbrains/qodana-jvm:2024.2
+#Specify inspection profile for code analysis
 profile:
-  name: qodana.recommended
-include:
-  - name: CheckDependencyLicenses
+  name: qodana.starter
+#Enable inspections
+#include:
+#  - name: <SomeEnabledInspectionId>
+#Disable inspections
+#exclude:
+#  - name: <SomeDisabledInspectionId>
+#    paths:
+#      - <path/where/not/run/inspection>
+#Execute shell command before Qodana execution (Applied in CI/CD pipeline)
+#bootstrap: sh ./prepare-qodana.sh
+#Install IDE plugins before Qodana execution (Applied in CI/CD pipeline)
+#plugins:
+#  - id: <plugin.id> #(plugin id can be found at https://plugins.jetbrains.com)
+#Specify Qodana linter for analysis (Applied in CI/CD pipeline)
+linter: jetbrains/qodana-<linter>:latest
+exclude:
+  - name: PyUnresolvedReferencesInspection
+  - name: PyReturnFromInitInspection
+  - name: PyByteLiteralInspection
+  - name: PyProtectedMemberInspection
+  - name: PyAttributeOutsideInitInspection
+  - name: PyNoneFunctionAssignmentInspection
+  - name: PyAssignmentToLoopOrWithParameterInspection
+  - name: PyCallingNonCallableInspection
+  - name: PyClassHasNoInitInspection
+  - name: PyAbstractClassInspection
+  - name: PyDecoratorInspection
+  - name: PyDeprecationInspection
+  - name: PyDictDuplicateKeysInspection
+  - name: PyDictCreationInspection
+  - name: PyStringFormatInspection
+  - name: PyExceptionInheritInspection
+  - name: PyNonAsciiCharInspection
+  - name: PyMethodFirstArgAssignmentInspection
+  - name: PyTestUnpassedFixtureInspection
+  - name: PySetFunctionToLiteralInspection
+  - name: PyGlobalUndefinedInspection
+  - name: PyMethodParametersInspection
+  - name: PyFromFutureImportInspection
+  - name: PyPropertyAccessInspection
+  - name: PyInitNewSignatureInspection
+  - name: PyStubPackagesCompatibilityInspection
+  - name: PyInconsistentIndentationInspection
+  - name: PyTestParametrizedInspection
+  - name: PyArgumentListInspection
+  - name: CommandLineInspection
+  - name: PyIncorrectDocstringInspection
+  - name: PyPropertyDefinitionInspection
+  - name: PyTypeCheckerInspection
+  - name: PyDataclassInspection
+  - name: PyNamedTupleInspection
+  - name: PyProtocolInspection
+  - name: PyTypeHintsInspection
+  - name: PyTypedDictInspection
+  - name: PyClassVarInspection
+  - name: PyNewStyleGenericSyntaxInspection
+  - name: PyOverridesInspection
+  - name: PyDunderSlotsInspection
+  - name: PyFinalInspection
+  - name: PyMethodMayBeStaticInspection
+  - name: PyPandasSeriesToListInspection
+  - name: PyMethodOverridingInspection
+  - name: PyMissingConstructorInspection
+  - name: PyAsyncCallInspection
+  - name: PyListCreationInspection
+  - name: PyOldStyleClassesInspection
+  - name: PyOverloadsInspection
+  - name: PyPep8Inspection
+  - name: PyPep8NamingInspection
+  - name: PoetryPackageVersionsInspection
+  - name: PyNestedDecoratorsInspection
+  - name: PyTrailingSemicolonInspection
+  - name: PyRedeclarationInspection
+  - name: PySimplifyBooleanCheckInspection
+  - name: PyRedundantParenthesesInspection
+  - name: PyShadowingBuiltinsInspection
+  - name: PyShadowingNamesInspection
+  - name: PySingleQuotedDocstringInspection
+  - name: PyStatementEffectInspection
+  - name: PyStubPackagesAdvertiser
+  - name: PyRelativeImportInspection
+  - name: PyDefaultArgumentInspection
+  - name: PyChainedComparisonsInspection
+  - name: PyTupleAssignmentBalanceInspection
+  - name: PyTupleItemAssignmentInspection
+  - name: PyDocstringTypesInspection
+  - name: PyUnboundLocalVariableInspection
+  - name: PyBroadExceptionInspection
+  - name: PyUnnecessaryBackslashInspection
+  - name: PyUnreachableCodeInspection
+  - name: PyPackageRequirementsInspection
+  - name: PyUnusedLocalInspection
+  - name: PyComparisonWithNoneInspection
+  - name: PySuperArgumentsInspection
+  - name: PyExceptClausesOrderInspection
