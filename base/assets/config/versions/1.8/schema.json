@@ -1,0 +1,147 @@
+{
+    "type": "object",
+    "properties": {
+        "allow-flight": {
+            "type": "boolean"
+        },
+        "allow-nether": {
+            "type": "boolean"
+        },
+        "announce-player-achievements": {
+            "type": "boolean"
+        },
+        "difficulty": {
+            "type": "integer"
+        },
+        "enable-command-block": {
+            "type": "boolean"
+        },
+        "enable-query": {
+            "type": "boolean"
+        },
+        "enable-rcon": {
+            "type": "boolean"
+        },
+        "force-gamemode": {
+            "type": "boolean"
+        },
+        "gamemode": {
+            "type": "integer"
+        },
+        "generate-structures": {
+            "type": "boolean"
+        },
+        "generator-settings": {
+            "type": "string"
+        },
+        "hardcore": {
+            "type": "boolean"
+        },
+        "level-name": {
+            "type": "string"
+        },
+        "level-seed": {
+            "type": "string"
+        },
+        "level-type": {
+            "type": "string"
+        },
+        "max-build-height": {
+            "type": "integer"
+        },
+        "max-players": {
+            "type": "integer"
+        },
+        "max-tick-time": {
+            "type": "integer"
+        },
+        "max-world-size": {
+            "type": "integer"
+        },
+        "motd": {
+            "type": "string"
+        },
+        "network-compression-threshold": {
+            "type": "integer"
+        },
+        "online-mode": {
+            "type": "boolean"
+        },
+        "op-permission-level": {
+            "type": "integer"
+        },
+        "player-idle-timeout": {
+            "type": "integer"
+        },
+        "pvp": {
+            "type": "boolean"
+        },
+        "resource-pack": {
+            "type": "string"
+        },
+        "resource-pack-hash": {
+            "type": "string"
+        },
+        "server-ip": {
+            "type": "string"
+        },
+        "server-port": {
+            "type": "integer"
+        },
+        "snooper-enabled": {
+            "type": "boolean"
+        },
+        "spawn-animals": {
+            "type": "boolean"
+        },
+        "spawn-monsters": {
+            "type": "boolean"
+        },
+        "spawn-npcs": {
+            "type": "boolean"
+        },
+        "view-distance": {
+            "type": "integer"
+        },
+        "white-list": {
+            "type": "boolean"
+        }
+    },
+    "required": [
+        "allow-flight",
+        "allow-nether",
+        "announce-player-achievements",
+        "difficulty",
+        "enable-command-block",
+        "enable-query",
+        "enable-rcon",
+        "force-gamemode",
+        "gamemode",
+        "generate-structures",
+        "generator-settings",
+        "hardcore",
+        "level-name",
+        "level-seed",
+        "level-type",
+        "max-build-height",
+        "max-players",
+        "max-tick-time",
+        "max-world-size",
+        "motd",
+        "network-compression-threshold",
+        "online-mode",
+        "op-permission-level",
+        "player-idle-timeout",
+        "pvp",
+        "resource-pack",
+        "resource-pack-hash",
+        "server-ip",
+        "server-port",
+        "snooper-enabled",
+        "spawn-animals",
+        "spawn-monsters",
+        "spawn-npcs",
+        "view-distance",
+        "white-list"
+    ]
+}
