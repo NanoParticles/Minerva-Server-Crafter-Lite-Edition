@@ -1,0 +1,227 @@
+{
+    "type": "object",
+    "properties": {
+        "allow-flight": {
+            "type": "boolean"
+        },
+        "allow-nether": {
+            "type": "boolean"
+        },
+        "broadcast-console-to-ops": {
+            "type": "boolean"
+        },
+        "broadcast-rcon-to-ops": {
+            "type": "boolean"
+        },
+        "difficulty": {
+            "type": "string"
+        },
+        "enable-command-block": {
+            "type": "boolean"
+        },
+        "enable-jmx-monitoring": {
+            "type": "boolean"
+        },
+        "enable-query": {
+            "type": "boolean"
+        },
+        "enable-rcon": {
+            "type": "boolean"
+        },
+        "enable-status": {
+            "type": "boolean"
+        },
+        "enforce-secure-profile": {
+            "type": "boolean"
+        },
+        "enforce-whitelist": {
+            "type": "boolean"
+        },
+        "entity-broadcast-range-percentage": {
+            "type": "integer"
+        },
+        "force-gamemode": {
+            "type": "boolean"
+        },
+        "function-permission-level": {
+            "type": "integer"
+        },
+        "gamemode": {
+            "type": "string"
+        },
+        "generate-structures": {
+            "type": "boolean"
+        },
+        "generator-settings": {
+            "type": "string"
+        },
+        "hardcore": {
+            "type": "boolean"
+        },
+        "hide-online-players": {
+            "type": "boolean"
+        },
+        "level-name": {
+            "type": "string"
+        },
+        "level-seed": {
+            "type": "string"
+        },
+        "level-type": {
+            "type": "string"
+        },
+        "max-chained-neighbor-updates": {
+            "type": "integer"
+        },
+        "max-players": {
+            "type": "integer"
+        },
+        "max-tick-time": {
+            "type": "integer"
+        },
+        "max-world-size": {
+            "type": "integer"
+        },
+        "motd": {
+            "type": "string"
+        },
+        "network-compression-threshold": {
+            "type": "integer"
+        },
+        "online-mode": {
+            "type": "boolean"
+        },
+        "op-permission-level": {
+            "type": "integer"
+        },
+        "player-idle-timeout": {
+            "type": "integer"
+        },
+        "prevent-proxy-connections": {
+            "type": "boolean"
+        },
+        "previews-chat": {
+            "type": "boolean"
+        },
+        "pvp": {
+            "type": "boolean"
+        },
+        "query.port": {
+            "type": "integer"
+        },
+        "rate-limit": {
+            "type": "integer"
+        },
+        "rcon.password": {
+            "type": "string"
+        },
+        "rcon.port": {
+            "type": "integer"
+        },
+        "require-resource-pack": {
+            "type": "boolean"
+        },
+        "resource-pack": {
+            "type": "string"
+        },
+        "resource-pack-prompt": {
+            "type": "string"
+        },
+        "resource-pack-sha1": {
+            "type": "string"
+        },
+        "server-ip": {
+            "type": "string"
+        },
+        "server-port": {
+            "type": "integer"
+        },
+        "simulation-distance": {
+            "type": "integer"
+        },
+        "spawn-animals": {
+            "type": "boolean"
+        },
+        "spawn-monsters": {
+            "type": "boolean"
+        },
+        "spawn-npcs": {
+            "type": "boolean"
+        },
+        "spawn-protection": {
+            "type": "integer"
+        },
+        "sync-chunk-writes": {
+            "type": "boolean"
+        },
+        "text-filtering-config": {
+            "type": "string"
+        },
+        "use-native-transport": {
+            "type": "boolean"
+        },
+        "view-distance": {
+            "type": "integer"
+        },
+        "white-list": {
+            "type": "boolean"
+        }
+    },
+    "required": [
+        "allow-flight",
+        "allow-nether",
+        "broadcast-console-to-ops",
+        "broadcast-rcon-to-ops",
+        "difficulty",
+        "enable-command-block",
+        "enable-jmx-monitoring",
+        "enable-query",
+        "enable-rcon",
+        "enable-status",
+        "enforce-secure-profile",
+        "enforce-whitelist",
+        "entity-broadcast-range-percentage",
+        "force-gamemode",
+        "function-permission-level",
+        "gamemode",
+        "generate-structures",
+        "generator-settings",
+        "hardcore",
+        "hide-online-players",
+        "level-name",
+        "level-seed",
+        "level-type",
+        "max-chained-neighbor-updates",
+        "max-players",
+        "max-tick-time",
+        "max-world-size",
+        "motd",
+        "network-compression-threshold",
+        "online-mode",
+        "op-permission-level",
+        "player-idle-timeout",
+        "prevent-proxy-connections",
+        "previews-chat",
+        "pvp",
+        "query.port",
+        "rate-limit",
+        "rcon.password",
+        "rcon.port",
+        "require-resource-pack",
+        "resource-pack",
+        "resource-pack-prompt",
+        "resource-pack-sha1",
+        "server-ip",
+        "server-port",
+        "simulation-distance",
+        "spawn-animals",
+        "spawn-monsters",
+        "spawn-npcs",
+        "spawn-protection",
+        "sync-chunk-writes",
+        "text-filtering-config",
+        "use-native-transport",
+        "view-distance",
+        "white-list"
+    ]
+}

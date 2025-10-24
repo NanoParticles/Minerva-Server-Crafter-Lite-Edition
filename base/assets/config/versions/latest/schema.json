@@ -1,0 +1,395 @@
+{
+    "type": "object",
+    "properties": {
+        "accepts-transfers": {
+            "default": false,
+            "type": "boolean"
+        },
+        "allow-flight": {
+            "default": false,
+            "type": "boolean"
+        },
+        "broadcast-console-to-ops": {
+            "default": true,
+            "type": "boolean"
+        },
+        "broadcast-rcon-to-ops": {
+            "default": true,
+            "type": "boolean"
+        },
+        "bug-report-link": {
+            "default": "",
+            "type": "string"
+        },
+        "difficulty": {
+            "enum": [
+                "peaceful",
+                "easy",
+                "normal",
+                "hard"
+            ],
+            "default": "easy",
+            "type": "string"
+        },
+        "enable-code-of-conduct": {
+            "default": false,
+            "type": "boolean"
+        },
+        "enable-jmx-monitoring": {
+            "default": false,
+            "type": "boolean"
+        },
+        "enable-query": {
+            "default": false,
+            "type": "boolean"
+        },
+        "enable-rcon": {
+            "default": false,
+            "type": "boolean"
+        },
+        "enable-status": {
+            "default": true,
+            "type": "boolean"
+        },
+        "enforce-secure-profile": {
+            "default": true,
+            "type": "boolean"
+        },
+        "enforce-whitelist": {
+            "default": false,
+            "type": "boolean"
+        },
+        "entity-broadcast-range-percentage": {
+            "default": 100,
+            "type": "integer"
+        },
+        "force-gamemode": {
+            "default": false,
+            "type": "boolean"
+        },
+        "function-permission-level": {
+            "default": 2,
+            "type": "integer"
+        },
+        "gamemode": {
+            "enum": [
+                "survival",
+                "creative",
+                "adventure",
+                "spectator"
+            ],
+            "default": "survival",
+            "type": "string"
+        },
+        "generate-structures": {
+            "default": true,
+            "type": "boolean"
+        },
+        "generator-settings": {
+            "default": "{}",
+            "type": "string"
+        },
+        "hardcore": {
+            "default": false,
+            "type": "boolean"
+        },
+        "hide-online-players": {
+            "default": false,
+            "type": "boolean"
+        },
+        "initial-disabled-packs": {
+            "default": "",
+            "type": "string"
+        },
+        "initial-enabled-packs": {
+            "default": "vanilla",
+            "type": "string"
+        },
+        "level-name": {
+            "default": "world",
+            "type": "string"
+        },
+        "level-seed": {
+            "default": "",
+            "type": "string"
+        },
+        "level-type": {
+            "enum": [
+                "minecraft\\:normal",
+                "minecraft\\:flat",
+                "minecraft\\:large_biomes",
+                "minecraft\\:amplified",
+                "minecraft\\:single_biome_surface",
+                "DEFAULT",
+                "BUFFET",
+                "CUSTOMIZED,",
+                "buffet",
+                "default_1_1",
+                "customized",
+                "default"
+            ],
+            "default": "minecraft\\:normal",
+            "type": "string"
+        },
+        "log-ips": {
+            "default": true,
+            "type": "boolean"
+        },
+        "management-server-enabled": {
+            "default": false,
+            "type": "boolean"
+        },
+        "management-server-host": {
+            "default": "localhost",
+            "type": "string"
+        },
+        "management-server-port": {
+            "default": 0,
+            "type": "integer"
+        },
+        "management-server-secret": {
+            "anyOf": [
+                {
+                    "default": null,
+                    "type": "null"
+                },
+                {
+                    "default": null,
+                    "type": "string"
+                }
+            ]
+        },
+        "management-server-tls-enabled": {
+            "default": true,
+            "type": "boolean"
+        },
+        "management-server-tls-keystore": {
+            "anyOf": [
+                {
+                    "default": null,
+                    "type": "null"
+                },
+                {
+                    "default": null,
+                    "type": "string"
+                }
+            ]
+        },
+        "management-server-tls-keystore-password": {
+            "anyOf": [
+                {
+                    "default": null,
+                    "type": "null"
+                },
+                {
+                    "default": null,
+                    "type": "string"
+                }
+            ]
+        },
+        "max-chained-neighbor-updates": {
+            "default": 1000000,
+            "type": "integer"
+        },
+        "max-players": {
+            "default": 20,
+            "type": "integer"
+        },
+        "max-tick-time": {
+            "default": 60000,
+            "type": "integer"
+        },
+        "max-world-size": {
+            "default": 29999984,
+            "type": "integer"
+        },
+        "motd": {
+            "default": "A Minecraft Server",
+            "type": "string"
+        },
+        "network-compression-threshold": {
+            "default": 256,
+            "type": "integer"
+        },
+        "online-mode": {
+            "default": true,
+            "type": "boolean"
+        },
+        "op-permission-level": {
+            "default": 4,
+            "type": "integer"
+        },
+        "pause-when-empty-seconds": {
+            "default": 60,
+            "type": "integer"
+        },
+        "player-idle-timeout": {
+            "default": 0,
+            "type": "integer"
+        },
+        "prevent-proxy-connections": {
+            "default": false,
+            "type": "boolean"
+        },
+        "query.port": {
+            "default": 25565,
+            "type": "integer"
+        },
+        "rate-limit": {
+            "default": 0,
+            "type": "integer"
+        },
+        "rcon.password": {
+            "default": "",
+            "type": "string"
+        },
+        "rcon.port": {
+            "default": 25575,
+            "type": "integer"
+        },
+        "region-file-compression": {
+            "enum": [
+                "deflate",
+                "lz4",
+                "none"
+            ],
+            "default": "deflate",
+            "type": "string"
+        },
+        "require-resource-pack": {
+            "default": false,
+            "type": "boolean"
+        },
+        "resource-pack": {
+            "default": "",
+            "type": "string"
+        },
+        "resource-pack-id": {
+            "default": "",
+            "type": "string"
+        },
+        "resource-pack-prompt": {
+            "default": "",
+            "type": "string"
+        },
+        "resource-pack-sha1": {
+            "default": "",
+            "type": "string"
+        },
+        "server-ip": {
+            "default": "",
+            "type": "string"
+        },
+        "server-port": {
+            "default": 25565,
+            "type": "integer"
+        },
+        "simulation-distance": {
+            "default": 10,
+            "type": "integer"
+        },
+        "spawn-protection": {
+            "default": 16,
+            "type": "integer"
+        },
+        "sync-chunk-writes": {
+            "default": true,
+            "type": "boolean"
+        },
+        "text-filtering-config": {
+            "default": "",
+            "type": "string"
+        },
+        "text-filtering-version": {
+            "default": 0,
+            "type": "integer"
+        },
+        "use-native-transport": {
+            "default": true,
+            "type": "boolean"
+        },
+        "view-distance": {
+            "default": 10,
+            "type": "integer"
+        },
+        "white-list": {
+            "default": false,
+            "type": "boolean"
+        },
+        "management-server-allowed-origins": {
+            "type": "string"
+        },
+        "status-heartbeat-interval": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "accepts-transfers",
+        "allow-flight",
+        "broadcast-console-to-ops",
+        "broadcast-rcon-to-ops",
+        "bug-report-link",
+        "difficulty",
+        "enable-code-of-conduct",
+        "enable-jmx-monitoring",
+        "enable-query",
+        "enable-rcon",
+        "enable-status",
+        "enforce-secure-profile",
+        "enforce-whitelist",
+        "entity-broadcast-range-percentage",
+        "force-gamemode",
+        "function-permission-level",
+        "gamemode",
+        "generate-structures",
+        "generator-settings",
+        "hardcore",
+        "hide-online-players",
+        "initial-disabled-packs",
+        "initial-enabled-packs",
+        "level-name",
+        "level-seed",
+        "level-type",
+        "log-ips",
+        "management-server-allowed-origins",
+        "management-server-enabled",
+        "management-server-host",
+        "management-server-port",
+        "management-server-secret",
+        "management-server-tls-enabled",
+        "management-server-tls-keystore",
+        "management-server-tls-keystore-password",
+        "max-chained-neighbor-updates",
+        "max-players",
+        "max-tick-time",
+        "max-world-size",
+        "motd",
+        "network-compression-threshold",
+        "online-mode",
+        "op-permission-level",
+        "pause-when-empty-seconds",
+        "player-idle-timeout",
+        "prevent-proxy-connections",
+        "query.port",
+        "rate-limit",
+        "rcon.password",
+        "rcon.port",
+        "region-file-compression",
+        "require-resource-pack",
+        "resource-pack",
+        "resource-pack-id",
+        "resource-pack-prompt",
+        "resource-pack-sha1",
+        "server-ip",
+        "server-port",
+        "simulation-distance",
+        "spawn-protection",
+        "status-heartbeat-interval",
+        "sync-chunk-writes",
+        "text-filtering-config",
+        "text-filtering-version",
+        "use-native-transport",
+        "view-distance",
+        "white-list"
+    ]
+}

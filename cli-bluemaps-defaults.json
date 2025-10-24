@@ -1,0 +1,352 @@
+{
+	"$schema": "http://json-schema.org/draft-04/schema#",
+	"type": "object",
+	"properties": {
+		"world": {
+			"type": "string",
+			"default":"world"
+		},
+		"dimension": {
+			"type": "string",
+			"default":"minecraft:overworld"
+		},
+		"name": {
+			"type": "string",
+			"default":"Overworld"
+		},
+		"sorting": {
+			"type": "integer",
+			"default":0
+		},
+		"sky-color": {
+			"type": "string",
+			"default":"#7dabff"
+		},
+		"void-color": {
+			"type": "string",
+			"default":"#000000"
+		},
+		"sky-light": {
+			"type": "integer",
+			"default": 1
+		},
+		"ambient-light": {
+			"type": "number",
+			"default": 0.1
+		},
+		"remove-caves-below-y": {
+			"type": "integer",
+			"default": 55
+		},
+		"cave-detection-ocean-floor": {
+			"type": "integer",
+			"default": -5
+		},
+		"cave-detection-uses-block-light": {
+			"type": "boolean",
+			"default": false
+		},
+		"min-inhabited-time": {
+			"type": "integer",
+			"default": 0
+		},
+		"render-mask": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"properties": {
+					"type": {
+						"type": "string",
+						"enum": ["box", "circle", "ellipse", "polygon"]
+					},
+					"subtract": {
+						"type": "boolean",
+						"default": false
+					},
+					"min-x": {
+						"type": "integer"
+					},
+					"max-x": {
+						"type": "integer"
+					},
+					"min-y": {
+						"type": "integer"
+					},
+					"max-y": {
+						"type": "integer"
+					},
+					"min-z": {
+						"type": "integer"
+					},
+					"max-z": {
+						"type": "integer"
+					},
+					"center-x": {
+						"type": "integer"
+					},
+					"center-y": {
+						"type": "integer"
+					},
+					"radius": {
+						"type": "integer"
+					},
+					"radius-x": {
+						"type": "integer"
+					},
+					"radius-z": {
+						"type": "integer"
+					},
+					"shape": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"properties": {
+								"x": { "type": "integer" },
+								"z": { "type": "integer" }
+							},
+							"required": ["x", "z"]
+						}
+					}
+				},
+				"required": ["type"]
+			}
+		},
+		"render-edges": {
+			"type": "boolean",
+			"default": true
+		},
+		"edge-light-strength": {
+			"type": "integer",
+			"default": 8
+		},
+		"enable-perspective-view": {
+			"type": "boolean",
+			"default": true
+		},
+		"enable-flat-view": {
+			"type": "boolean",
+			"default": true
+		},
+		"enable-free-flight-view": {
+			"type": "boolean",
+			"default": true
+		},
+		"enable-hires": {
+			"type": "boolean",
+			"default": true
+		},
+		"storage": {
+			"type": "string",
+			"default": "file"
+		},
+		"ignore-missing-light-data": {
+			"type": "boolean",
+			"default": false
+		},
+		"marker-sets": {
+			"type": "object",
+			"patternProperties": {
+				"^.*$": {
+					"type": "object",
+					"properties": {
+						"label": {
+							"type": "string",
+							"default": ""
+						},
+						"toggleable": {
+							"type": "boolean",
+							"default": true
+						},
+						"default-hidden": {
+							"type": "boolean",
+							"default": false
+						},
+						"sorting": {
+							"type": "integer",
+							"default": 0
+						},
+						"markers": {
+							"type": "object",
+							"patternProperties": {
+								"^.*$": {
+									"type": "object",
+									"properties": {
+										"type": {
+											"type": "string",
+											"enum": ["poi", "html", "line", "shape", "extrude"]
+										},
+										"position": {
+											"type": "object",
+											"properties": {
+												"x": {
+													"type": "integer"
+												},
+												"y": {
+													"type": "integer"
+												},
+												"z": {
+													"type": "integer"
+												}
+											},
+											"required": ["x", "y", "z"]
+										},
+										"label": {
+											"type": "string"
+										},
+										"icon": {
+											"type": "string"
+										},
+										"html": {
+											"type": "string"
+										},
+										"anchor": {
+											"type": "object",
+											"properties": {
+												"x": {
+													"type": "integer"
+												},
+												"y": {
+													"type": "integer"
+												}
+											},
+											"required": ["x", "y"]
+										},
+										"sorting": {
+											"type": "integer" 
+										},
+										"listed": {
+											"type": "boolean"
+										},
+										"min-distance": {
+											"type": "integer"
+										},
+										"max-distance": {
+											"type": "integer"
+										},
+										"line": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"properties": {
+													"x": {
+														"type": "integer"
+													},
+													"y": {
+														"type": "integer"
+													},
+													"z": {
+														"type": "integer"
+													}
+												},
+												"required": ["x", "y", "z"]
+											}
+										},
+										"shape": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"properties": {
+													"x": {
+														"type": "integer"
+													},
+													"z": {
+														"type": "integer"
+													}
+												},
+												"required": ["x", "z"]
+											}
+										},
+										"shape-y": {
+											"type": "integer"
+										},
+										"shape-min-y": {
+											"type": "integer"
+										},
+										"shape-max-y": {
+											"type": "integer"
+										},
+										"detail": {
+											"type": "string"
+										},
+										"new-tab": {
+											"type": "boolean"
+										},
+										"depth-test": {
+											"type": "boolean"
+										},
+										"line-width": {
+											"type": "integer"
+										},
+										"line-color": {
+											"type": "object",
+											"properties": {
+												"r": {
+													"type": "integer"
+												},
+												"g": {
+													"type": "integer"
+												},
+												"b": {
+													"type": "integer"
+												},
+												"a": {
+													"type": "number"
+												}
+											},
+											"required": ["r", "g", "b", "a"]
+										},
+										"fill-color": {
+											"type": "object",
+											"properties": {
+												"r": {
+													"type": "integer"
+												},
+												"g": {
+													"type": "integer"
+												},
+												"b": {
+													"type": "integer"
+												},
+												"a": {
+													"type": "number"
+												}
+											},
+											"required": ["r", "g", "b", "a"]
+										}
+									},
+									"required": ["type", "position", "label"]
+								}
+							},
+							"default": {}
+						}
+					},
+					"required": ["label", "markers"]
+				}
+			}
+		}
+	},
+	"required": [
+		"world",
+		"dimension",
+		"name",
+		"sorting",
+		"sky-color",
+		"void-color",
+		"sky-light",
+		"ambient-light",
+		"remove-caves-below-y",
+		"cave-detection-ocean-floor",
+		"cave-detection-uses-block-light",
+		"min-inhabited-time",
+		"render-mask",
+		"render-edges",
+		"edge-light-strength",
+		"enable-perspective-view",
+		"enable-flat-view",
+		"enable-free-flight-view",
+		"enable-hires",
+		"storage",
+		"ignore-missing-light-data",
+		"marker-sets"
+	]
+}
