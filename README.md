@@ -1,4 +1,6 @@
 # Minerva Server Crafter - Lite Edition
+![alt text](https://github.com/NanoParticles/Minerva-Server-Crafter-Lite-Edition-Dev-Branch/blob/0512495d6820e4b96ebdd5b633e26cec24bc2bf3/MINERVA-SERVER-CRAFTER-10-24-2025.png?raw=true)
+
 Minerva Server Crafter - Lite Edition is a Lightweight GUI Console that allows the user to create, configure, and manage a Minecraft Server with the given server jar file.
 
 # Credits
